@@ -19,3 +19,20 @@
 
 # Go workspace file
 go.work
+
+# Rust related files
+**/target
+**/*.rs.bk
+**/Cargo.lock
+.cargo/
+
+# CLion IDE
+.idea
+*.iws
+*.iml
+*.ipr
+
+# Misc
+.DS_Store
+.vscode
+*.code-workspace
