@@ -35,8 +35,5 @@ go.work
 # Misc
 .DS_Store
 .vscode
-<<<<<<< HEAD
 *.code-workspace
-=======
 target
->>>>>>> 39e6d16 (Get Tonic working)
