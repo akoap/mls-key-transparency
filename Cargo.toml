@@ -6,8 +6,8 @@ members = [
   "libcrux_crypto",
   "cli",
   "memory_keystore",
-  "delivery-service/ds",
-  "delivery-service/ds-lib",
+  "delivery_service/ds",
+  "delivery_service/ds-lib",
   "basic_credential",
 ]
 resolver = "2"
