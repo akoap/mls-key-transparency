@@ -33,8 +33,7 @@ impl From<akd::helper_structs::EpochHash> for EpochHashSerializable {
 
 /// The AS state.
 /// It holds the state for this application.
-// TODO: See if this can be made private
-pub struct ASData {
+struct ASData {
     directory: Mutex<Directory<Config, AsyncInMemoryDatabase, HardCodedAkdVRF>>,
 }
 
@@ -85,15 +84,13 @@ pub struct UserHistoryRet{
     proof : HistoryProof
 }
 
-// TODO: Try making private
 #[derive(der::Sequence)]
-pub struct AKDValueFormat {
+struct AKDValueFormat {
     vec: Vec<asn1::Any>,
 }
 
-//TODO: Could probably be private
 #[derive(Deserialize)]
-pub struct HistoryParamsQuery {
+struct HistoryParamsQuery {
     most_recent:usize,
     since_epoch:u64
 }
@@ -107,9 +104,8 @@ impl Default for HistoryParamsQuery {
     }
 }
 
-//TODO: Could probably be private
 #[derive(Deserialize)]
-pub struct AuditQuery {
+struct AuditQuery {
     start_epoch:u64,
     end_epoch:u64
 }
@@ -123,7 +119,7 @@ impl Default for AuditQuery {
     }
 }
 
-fn to_akd_value(input: &mut Vec<Vec<u8>>) -> Result<AkdValue> {
+pub fn to_akd_value(input: &mut Vec<Vec<u8>>) -> Result<AkdValue> {
     let mut to_write = AKDValueFormat {
         vec: Vec::<asn1::Any>::new(),
     };
