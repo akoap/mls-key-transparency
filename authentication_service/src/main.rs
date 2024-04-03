@@ -16,12 +16,14 @@ use ed25519_dalek::*;
 
 type Config = akd::WhatsAppV1Configuration;
 
+// The EpochHash struct was not mads serializable by the creators of AKD, so we make an equivalent struct here that is serializable
 #[derive(Serialize, Deserialize)]
 pub struct EpochHashSerializable {
     epoch: u64,
     digest: [u8; 32],
 }
 
+// To make conversions from the akd struct to our struct easier, define this as a function (there's already a fairly simple mapping between mambers of the two structs)
 impl From<akd::helper_structs::EpochHash> for EpochHashSerializable {
     fn from(item: akd::helper_structs::EpochHash) -> Self {
         EpochHashSerializable {
@@ -37,6 +39,7 @@ struct ASData {
     directory: Mutex<Directory<Config, AsyncInMemoryDatabase, HardCodedAkdVRF>>,
 }
 
+// Creates an instance of the struct given the directory as an argument
 impl ASData {
     fn init(input: Directory<Config, AsyncInMemoryDatabase, HardCodedAkdVRF>) -> Self {
         Self {
@@ -45,6 +48,7 @@ impl ASData {
     }
 }
 
+// Simplifies the error handling within the functions that can just return an internal server error
 macro_rules! unwrap_data {
     ( $e:expr ) => {
         match $e {
@@ -54,47 +58,55 @@ macro_rules! unwrap_data {
     };
 }
 
+// Tells the calling code what hash algorithm we are using
 #[derive(Debug, Default, Serialize, Deserialize)]
-enum ASHashAlgorithm {
+pub enum ASHashAlgorithm {
     #[default]
     Sha256,
 }
 
+// The struct defining the output from the get public key endpoint
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct GetPubKeyRet {
     hash_algorithm: ASHashAlgorithm,
-    public_key: Vec<u8>,
+    public_key: Vec<u8>, // DER encoded public key
 }
 
+// The struct defining the input to the add user endpoint
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct AddUserInput {
     username: String,
-    public_keys: Vec<Vec<u8>>,
+    public_keys: Vec<Vec<u8>>, // Sequence of DER encoded public keys
 }
 
+// The struct defining the output from the lookup user endpoint
 #[derive(Serialize, Deserialize)]
 pub struct LookupUserRet{
     epoch_hash : EpochHashSerializable,
     proof : LookupProof
 }
 
+// The struct defining the output from the get user history endpoint
 #[derive(Serialize, Deserialize)]
 pub struct UserHistoryRet{
     epoch_hash : EpochHashSerializable,
     proof : HistoryProof
 }
 
+// Private struct used to serialize a vector of DER encoded public keys into one DER-encoded blob using the Sequence of functionality of the der library
 #[derive(der::Sequence)]
 struct AKDValueFormat {
     vec: Vec<asn1::Any>,
 }
 
+// Private struct defining the query parameters used to control the get user history endpoint
 #[derive(Deserialize)]
 struct HistoryParamsQuery {
     most_recent:usize,
     since_epoch:u64
 }
 
+// Override the default values to ensure the output is sane
 impl Default for HistoryParamsQuery {
     fn default() -> Self {
         HistoryParamsQuery {
@@ -104,12 +116,14 @@ impl Default for HistoryParamsQuery {
     }
 }
 
+// Private struct defining the query parameters used to control the audit endpoint
 #[derive(Deserialize)]
 struct AuditQuery {
     start_epoch:u64,
     end_epoch:u64
 }
 
+// Override the default values to ensure the output is sane
 impl Default for AuditQuery {
     fn default() -> Self {
         AuditQuery {
@@ -119,23 +133,33 @@ impl Default for AuditQuery {
     }
 }
 
+// Public function to convert a vector of DER encoded public keys into the Akd value used
 pub fn to_akd_value(input: &mut Vec<Vec<u8>>) -> Result<AkdValue> {
+    // Initialize the helper struct defined above
     let mut to_write = AKDValueFormat {
         vec: Vec::<asn1::Any>::new(),
     };
+    // Ierate through each public key in the input, convert it, and add it to the output
     for elem in input.iter() {
         to_write.vec.push(asn1::Any::from_der(&elem)?);
     }
+    // Convert from the helper struct to the final binary blob
     let result = to_write.to_der().unwrap();
+    // Return the converted value
     Ok(AkdValue(result))
 }
 
+// Public function to convert a Akd value used into a vector of DER encoded public keys
 pub fn from_akd_value(input:&mut AkdValue) -> Result<Vec<Vec<u8>>> {
+    // Convert the binary blob to the helper struct above
     let fmt = AKDValueFormat::from_der(&input.0)?;
+    // Initialize the return value
     let mut to_ret = Vec::<Vec<u8>>::new();
+    // Cycle through every element in the helper struct and convert it to the output format, adding it to the return value
     for elem in fmt.vec.iter() {
         to_ret.push(elem.value().to_vec());
     }
+    // Return the converted value
     Ok(to_ret)
 }
 
@@ -150,23 +174,28 @@ async fn get_public_key_request<'a>(data: web::Data<ASData>) -> impl Responder {
     // First get the correct public key
     let dir = data.directory.lock().unwrap();
     let pub_key_plain = unwrap_data!(dir.get_public_key().await).to_bytes();
+    // Then we need to do multiple steps to convert it to the correct format (warning: rearranging this into fewer lines might cause it not to compile)
     let pub_key_obj =
         unwrap_data!(unwrap_data!(VerifyingKey::from_bytes(&pub_key_plain)).to_public_key_der());
     let pub_key_der = pub_key_obj.as_bytes();
+    // Set up the output structure to serialize
     let to_ret = GetPubKeyRet {
         hash_algorithm: crate::ASHashAlgorithm::Sha256,
         public_key: pub_key_der.to_vec(),
     };
+    // Return the serialized output
     actix_web::HttpResponse::Ok().json(to_ret)
 }
 
  // This is also used for updating a user
 #[post("/add_user")]
 async fn add_user<'a>(mut json: web::Json<AddUserInput>, data: web::Data<ASData>) -> impl Responder {
+    // Format the input key-value pairs are supposed to be in (taken straight from docs)
     let to_add = vec![(
         AkdLabel::from(&json.username),
         unwrap_data!(to_akd_value(&mut json.public_keys)),
     )];
+    // Add this to the directory and return the serialized output
     let dir = data.directory.lock().unwrap();
     let result = unwrap_data!(dir.publish(to_add).await);
     actix_web::HttpResponse::Ok().json(EpochHashSerializable::from(result))
@@ -174,7 +203,9 @@ async fn add_user<'a>(mut json: web::Json<AddUserInput>, data: web::Data<ASData>
 
 #[get("/{username}/lookup")]
 async fn lookup_user<'a>(path: web::Path<String>, data: web::Data<ASData>) -> impl Responder {
+    // The username we get from the url used (not sure if this handles url encoding)
     let username = path.into_inner();
+    // Perform the lookup, format the output, and return it
     let dir = data.directory.lock().unwrap();
     let (proof, hash) = unwrap_data!(dir.lookup(AkdLabel::from(&username)).await);
     let to_ret = LookupUserRet {
@@ -186,13 +217,18 @@ async fn lookup_user<'a>(path: web::Path<String>, data: web::Data<ASData>) -> im
 
 #[get("/{username}/history")]
 async fn user_history<'a>(path: web::Path<String>, query: web::Query<HistoryParamsQuery>, data: web::Data<ASData>) -> impl Responder {
+    // The username we get from the url used (not sure if this handles url encoding)
     let username = path.into_inner();
+    // Since the HistoryParams enum was not made serializable, we use query parameters instead of it
     let mut params = akd::directory::HistoryParams::Complete;
+    // If most recent query parameter was set, use it
     if query.most_recent != std::usize::MIN {
         params = akd::directory::HistoryParams::MostRecent(query.most_recent)
+    // Otherwise if the since epoch query parameter was set, use it
     } else if query.since_epoch != std::u64::MAX {
         params = akd::directory::HistoryParams::SinceEpoch(query.since_epoch)
     }
+    // Perform the lookup, format the output, and return it
     let dir = data.directory.lock().unwrap();
     let (proof, hash) = unwrap_data!(dir.key_history(&AkdLabel::from(&username), params).await);
     let to_ret = UserHistoryRet {
@@ -204,24 +240,27 @@ async fn user_history<'a>(path: web::Path<String>, query: web::Query<HistoryPara
 
 #[get("/audit")]
 async fn audit_directory<'a>(mut query: web::Query<AuditQuery>, data: web::Data<ASData>) -> impl Responder {
+    // For this one we use the parameters and/or their defaults mostly as-is, but we automatically adjust an unset max epoch value to the largest valid value to avoid making the user worry about the current epoch value
+    // Since the max allowable epoch value requires an api query, set ourselves up here
     let dir = data.directory.lock().unwrap();
+    // Perform the necessary adjustment
     if query.end_epoch == std::u64::MAX {
         query.end_epoch = unwrap_data!(dir.get_epoch_hash().await).0;
     }
+    // get the proof and return it after serializing
     let result = unwrap_data!(dir.audit(query.start_epoch, query.end_epoch).await);
     actix_web::HttpResponse::Ok().json(result)
 }
 
 // === Main function driving the AS ===
-
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     pretty_env_logger::init();
 
     // Configure App and command line arguments.
-    let matches = Command::new("OpenMLS DS")
+    let matches = Command::new("OpenMLS+AKD AS")
         .version("0.1.0")
-        .author("OpenMLS Developers")
+        .author("Mihir Rajpal")
         .about("PoC MLS Authentication Service")
         .arg(
             clap::Arg::new("port")
