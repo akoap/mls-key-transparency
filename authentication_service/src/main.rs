@@ -1,33 +1,29 @@
 use actix_web::{get, post, web, web::Payload, App, HttpServer, Responder};
 use clap::Command;
 use futures_util::StreamExt;
-use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
 
-use akd::storage::StorageManager;
-use akd::storage::memory::AsyncInMemoryDatabase;
-use akd::ecvrf::HardCodedAkdVRF;
 use akd::directory::Directory;
+use akd::ecvrf::HardCodedAkdVRF;
+use akd::storage::memory::AsyncInMemoryDatabase;
+use akd::storage::StorageManager;
 use akd::{AkdLabel, AkdValue};
 use der::asn1;
 use der::{Decode, Encode};
 
-use ed25519_dalek::*;
 use ed25519_dalek::pkcs8::*;
+use ed25519_dalek::*;
 
 type Config = akd::WhatsAppV1Configuration;
 
-#[cfg(test)]
-mod test;
-
 #[derive(Serialize, Deserialize)]
 pub struct EpochHashSerializable {
-    epoch : u64,
-    digest : [u8; 32],
+    epoch: u64,
+    digest: [u8; 32],
 }
 
-impl From<akd::helper_structs::EpochHash> for EpochHashSerializable
-{
+impl From<akd::helper_structs::EpochHash> for EpochHashSerializable {
     fn from(item: akd::helper_structs::EpochHash) -> Self {
         EpochHashSerializable {
             epoch: item.0,
@@ -39,14 +35,14 @@ impl From<akd::helper_structs::EpochHash> for EpochHashSerializable
 /// The AS state.
 /// It holds the state for this application.
 // TODO: See if this can be made private
-pub struct ASData<'a> {
-    directory: Mutex<&'a mut Directory<Config, AsyncInMemoryDatabase, HardCodedAkdVRF>>,
+pub struct ASData {
+    directory: Mutex<Directory<Config, AsyncInMemoryDatabase, HardCodedAkdVRF>>,
 }
 
-impl <'a> ASData<'a> {
-    fn init(input: &'a mut Directory<Config, AsyncInMemoryDatabase, HardCodedAkdVRF>) -> Self {
+impl ASData {
+    fn init(input: Directory<Config, AsyncInMemoryDatabase, HardCodedAkdVRF>) -> Self {
         Self {
-            directory: Mutex::new(input)
+            directory: Mutex::new(input),
         }
     }
 }
@@ -88,7 +84,7 @@ macro_rules! unwrap_parse_json {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-enum ASHashAlgorithm{
+enum ASHashAlgorithm {
     #[default]
     Sha256,
 }
@@ -108,11 +104,13 @@ pub struct AddUserInput {
 // TODO: Try making private
 #[derive(der::Sequence)]
 pub struct AKDValueFormat {
-    vec : Vec<asn1::Any>,
+    vec: Vec<asn1::Any>,
 }
 
-fn to_akd_value(input:&mut Vec<Vec<u8>>) -> Result<AkdValue> {
-    let mut to_write = AKDValueFormat {vec: Vec::<asn1::Any>::new()};
+fn to_akd_value(input: &mut Vec<Vec<u8>>) -> Result<AkdValue> {
+    let mut to_write = AKDValueFormat {
+        vec: Vec::<asn1::Any>::new(),
+    };
     for elem in input.iter() {
         to_write.vec.push(asn1::Any::from_der(&elem)?);
     }
@@ -136,22 +134,23 @@ fn to_akd_value(input:&mut Vec<Vec<u8>>) -> Result<AkdValue> {
 /// An HTTP conflict (409) is returned if a client with this name exists
 /// already.
 #[get("/public_key")]
-async fn get_public_key_request<'a>(_body: Payload, data: web::Data<ASData<'a>>) -> impl Responder {
+async fn get_public_key_request<'a>(_body: Payload, data: web::Data<ASData>) -> impl Responder {
     // First get the correct public key
     let dir = data.directory.lock().unwrap();
     let pub_key_plain = unwrap_data!(dir.get_public_key().await).to_bytes();
-    let pub_key_obj = unwrap_data!(unwrap_data!(VerifyingKey::from_bytes(&pub_key_plain)).to_public_key_der());
+    let pub_key_obj =
+        unwrap_data!(unwrap_data!(VerifyingKey::from_bytes(&pub_key_plain)).to_public_key_der());
     let pub_key_der = pub_key_obj.as_bytes();
     let toRet = GetPubKeyRet {
         hash_algorithm: crate::ASHashAlgorithm::Sha256,
-        public_key: pub_key_der.to_vec(),  
+        public_key: pub_key_der.to_vec(),
     };
     actix_web::HttpResponse::Ok().json(toRet)
 }
 const MAX_SIZE: usize = 262_144; // max payload size is 256k
 
 #[post("/add_user")]
-async fn add_user<'a>(mut payload: Payload, data: web::Data<ASData<'a>>) -> impl Responder {
+async fn add_user<'a>(mut payload: Payload, data: web::Data<ASData>) -> impl Responder {
     // payload is a stream of Bytes objects
     let mut body = web::BytesMut::new();
     while let Some(chunk) = payload.next().await {
@@ -165,29 +164,32 @@ async fn add_user<'a>(mut payload: Payload, data: web::Data<ASData<'a>>) -> impl
 
     // body is loaded, now we can deserialize serde-json
     let mut obj = unwrap_parse_json!(serde_json::from_slice::<AddUserInput>(&body));
-    let toAdd = vec![(AkdLabel::from(&obj.username), unwrap_data!(to_akd_value(&mut obj.public_keys))),];
+    let toAdd = vec![(
+        AkdLabel::from(&obj.username),
+        unwrap_data!(to_akd_value(&mut obj.public_keys)),
+    )];
     let dir = data.directory.lock().unwrap();
     let result = unwrap_data!(dir.publish(toAdd).await);
     actix_web::HttpResponse::Ok().json(EpochHashSerializable::from(result))
 }
 
 #[post("/{username}/update")]
-async fn update_user<'a>(mut body: Payload, data: web::Data<ASData<'a>>) -> impl Responder {
+async fn update_user<'a>(mut body: Payload, data: web::Data<ASData>) -> impl Responder {
     actix_web::HttpResponse::Ok().finish()
 }
 
 #[get("/{username}/lookup")]
-async fn lookup_user<'a>(mut body: Payload, data: web::Data<ASData<'a>>) -> impl Responder {
+async fn lookup_user<'a>(mut body: Payload, data: web::Data<ASData>) -> impl Responder {
     actix_web::HttpResponse::Ok().finish()
 }
 
 #[get("/{username}/history")]
-async fn user_history<'a>(mut body: Payload, data: web::Data<ASData<'a>>) -> impl Responder {
+async fn user_history<'a>(mut body: Payload, data: web::Data<ASData>) -> impl Responder {
     actix_web::HttpResponse::Ok().finish()
 }
 
 #[get("/audit")]
-async fn audit_directory<'a>(mut body: Payload, data: web::Data<ASData<'a>>) -> impl Responder {
+async fn audit_directory<'a>(mut body: Payload, data: web::Data<ASData>) -> impl Responder {
     actix_web::HttpResponse::Ok().finish()
 }
 
@@ -213,12 +215,15 @@ async fn main() -> std::io::Result<()> {
 
     // The data this app operates on.
     // TODO: Fine tune configuration, storage, and VRF
-    static mut database: AsyncInMemoryDatabase = AsyncInMemoryDatabase::new();
-    static mut storage_manager: StorageManager<AsyncInMemoryDatabase> = StorageManager::new_no_cache(database);
-    static mut vrf: HardCodedAkdVRF = HardCodedAkdVRF{};
-    static mut directory: Option<Directory<Config, AsyncInMemoryDatabase, HardCodedAkdVRF>> = None;
-    directory = Some(Directory::<Config, _, _>::new(storage_manager, vrf).await.expect("Could not create AKD directory."));
-    let data = web::Data::new(ASData::init(&mut unwrap_dir!(directory)));
+    let database: AsyncInMemoryDatabase = AsyncInMemoryDatabase::new();
+    let storage_manager: StorageManager<AsyncInMemoryDatabase> =
+        StorageManager::new_no_cache(database);
+    let vrf: HardCodedAkdVRF = HardCodedAkdVRF {};
+    let directory: Directory<Config, AsyncInMemoryDatabase, HardCodedAkdVRF> =
+        Directory::<Config, _, _>::new(storage_manager, vrf)
+            .await
+            .expect("Could not create AKD directory.");
+    let data = web::Data::new(ASData::init(directory));
 
     // Set default port or use port provided on the command line.
     let port = matches.get_one("port").unwrap_or(&8000u16);
