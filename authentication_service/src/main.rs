@@ -1,6 +1,5 @@
-use actix_web::{get, post, web, web::Payload, App, HttpServer, Responder};
+use actix_web::{get, post, web, App, HttpServer, Responder};
 use clap::Command;
-use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 
@@ -8,7 +7,7 @@ use akd::directory::Directory;
 use akd::ecvrf::HardCodedAkdVRF;
 use akd::storage::memory::AsyncInMemoryDatabase;
 use akd::storage::StorageManager;
-use akd::{AkdLabel, AkdValue};
+use akd::{AkdLabel, AkdValue, HistoryProof, LookupProof};
 use der::asn1;
 use der::{Decode, Encode};
 
@@ -47,38 +46,11 @@ impl ASData {
     }
 }
 
-macro_rules! unwrap_item {
-    ( $e:expr ) => {
-        match $e {
-            Ok(x) => x,
-            Err(_) => return actix_web::HttpResponse::PartialContent().finish(),
-        }
-    };
-}
-
 macro_rules! unwrap_data {
     ( $e:expr ) => {
         match $e {
             Ok(x) => x,
             Err(_) => return actix_web::HttpResponse::InternalServerError().finish(),
-        }
-    };
-}
-
-macro_rules! unwrap_dir {
-    ( $e:expr ) => {
-        match $e {
-            Some(x) => x,
-            None => return actix_web::HttpResponse::InternalServerError().finish(),
-        }
-    };
-}
-
-macro_rules! unwrap_parse_json {
-    ( $e:expr ) => {
-        match $e {
-            Ok(x) => x,
-            Err(_) => return actix_web::HttpResponse::BadRequest().finish(),
         }
     };
 }
@@ -101,10 +73,54 @@ pub struct AddUserInput {
     public_keys: Vec<Vec<u8>>,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct LookupUserRet{
+    epoch_hash : EpochHashSerializable,
+    proof : LookupProof
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct UserHistoryRet{
+    epoch_hash : EpochHashSerializable,
+    proof : HistoryProof
+}
+
 // TODO: Try making private
 #[derive(der::Sequence)]
 pub struct AKDValueFormat {
     vec: Vec<asn1::Any>,
+}
+
+//TODO: Could probably be private
+#[derive(Deserialize)]
+pub struct HistoryParamsQuery {
+    most_recent:usize,
+    since_epoch:u64
+}
+
+impl Default for HistoryParamsQuery {
+    fn default() -> Self {
+        HistoryParamsQuery {
+            most_recent: std::usize::MIN,
+            since_epoch: std::u64::MAX
+        }
+    }
+}
+
+//TODO: Could probably be private
+#[derive(Deserialize)]
+pub struct AuditQuery {
+    start_epoch:u64,
+    end_epoch:u64
+}
+
+impl Default for AuditQuery {
+    fn default() -> Self {
+        AuditQuery {
+            start_epoch: std::u64::MIN,
+            end_epoch: std::u64::MAX
+        }
+    }
 }
 
 fn to_akd_value(input: &mut Vec<Vec<u8>>) -> Result<AkdValue> {
@@ -118,14 +134,14 @@ fn to_akd_value(input: &mut Vec<Vec<u8>>) -> Result<AkdValue> {
     Ok(AkdValue(result))
 }
 
-// fn from_akd_value(input:&mut AkdValue) -> Result<Vec<Vec<u8>>> {
-//     let fmt = AKDValueFormat::from_der(input.0)?;
-//     let toRet = Vec::<Vec<u8>>::new();
-//     for elem in fmt.vec.iter() {
-//         toRet.append(asn1::write_single(&elem)?);
-//     }
-//     Ok(toRet)
-// }
+pub fn from_akd_value(input:&mut AkdValue) -> Result<Vec<Vec<u8>>> {
+    let fmt = AKDValueFormat::from_der(&input.0)?;
+    let mut to_ret = Vec::<Vec<u8>>::new();
+    for elem in fmt.vec.iter() {
+        to_ret.push(elem.value().to_vec());
+    }
+    Ok(to_ret)
+}
 
 // === API ===
 
@@ -134,63 +150,70 @@ fn to_akd_value(input: &mut Vec<Vec<u8>>) -> Result<AkdValue> {
 /// An HTTP conflict (409) is returned if a client with this name exists
 /// already.
 #[get("/public_key")]
-async fn get_public_key_request<'a>(_body: Payload, data: web::Data<ASData>) -> impl Responder {
+async fn get_public_key_request<'a>(data: web::Data<ASData>) -> impl Responder {
     // First get the correct public key
     let dir = data.directory.lock().unwrap();
     let pub_key_plain = unwrap_data!(dir.get_public_key().await).to_bytes();
     let pub_key_obj =
         unwrap_data!(unwrap_data!(VerifyingKey::from_bytes(&pub_key_plain)).to_public_key_der());
     let pub_key_der = pub_key_obj.as_bytes();
-    let toRet = GetPubKeyRet {
+    let to_ret = GetPubKeyRet {
         hash_algorithm: crate::ASHashAlgorithm::Sha256,
         public_key: pub_key_der.to_vec(),
     };
-    actix_web::HttpResponse::Ok().json(toRet)
+    actix_web::HttpResponse::Ok().json(to_ret)
 }
-const MAX_SIZE: usize = 262_144; // max payload size is 256k
 
+ // This is also used for updating a user
 #[post("/add_user")]
-async fn add_user<'a>(mut payload: Payload, data: web::Data<ASData>) -> impl Responder {
-    // payload is a stream of Bytes objects
-    let mut body = web::BytesMut::new();
-    while let Some(chunk) = payload.next().await {
-        let chunk = unwrap_item!(chunk);
-        // limit max size of in-memory payload
-        if (body.len() + chunk.len()) > MAX_SIZE {
-            return actix_web::HttpResponse::BadRequest().finish();
-        }
-        body.extend_from_slice(&chunk);
-    }
-
-    // body is loaded, now we can deserialize serde-json
-    let mut obj = unwrap_parse_json!(serde_json::from_slice::<AddUserInput>(&body));
-    let toAdd = vec![(
-        AkdLabel::from(&obj.username),
-        unwrap_data!(to_akd_value(&mut obj.public_keys)),
+async fn add_user<'a>(mut json: web::Json<AddUserInput>, data: web::Data<ASData>) -> impl Responder {
+    let to_add = vec![(
+        AkdLabel::from(&json.username),
+        unwrap_data!(to_akd_value(&mut json.public_keys)),
     )];
     let dir = data.directory.lock().unwrap();
-    let result = unwrap_data!(dir.publish(toAdd).await);
+    let result = unwrap_data!(dir.publish(to_add).await);
     actix_web::HttpResponse::Ok().json(EpochHashSerializable::from(result))
 }
 
-#[post("/{username}/update")]
-async fn update_user<'a>(mut body: Payload, data: web::Data<ASData>) -> impl Responder {
-    actix_web::HttpResponse::Ok().finish()
-}
-
 #[get("/{username}/lookup")]
-async fn lookup_user<'a>(mut body: Payload, data: web::Data<ASData>) -> impl Responder {
-    actix_web::HttpResponse::Ok().finish()
+async fn lookup_user<'a>(path: web::Path<String>, data: web::Data<ASData>) -> impl Responder {
+    let username = path.into_inner();
+    let dir = data.directory.lock().unwrap();
+    let (proof, hash) = unwrap_data!(dir.lookup(AkdLabel::from(&username)).await);
+    let to_ret = LookupUserRet {
+        epoch_hash: EpochHashSerializable::from(hash),
+        proof : proof,
+    };
+    actix_web::HttpResponse::Ok().json(to_ret)
 }
 
 #[get("/{username}/history")]
-async fn user_history<'a>(mut body: Payload, data: web::Data<ASData>) -> impl Responder {
-    actix_web::HttpResponse::Ok().finish()
+async fn user_history<'a>(path: web::Path<String>, query: web::Query<HistoryParamsQuery>, data: web::Data<ASData>) -> impl Responder {
+    let username = path.into_inner();
+    let mut params = akd::directory::HistoryParams::Complete;
+    if query.most_recent != std::usize::MIN {
+        params = akd::directory::HistoryParams::MostRecent(query.most_recent)
+    } else if query.since_epoch != std::u64::MAX {
+        params = akd::directory::HistoryParams::SinceEpoch(query.since_epoch)
+    }
+    let dir = data.directory.lock().unwrap();
+    let (proof, hash) = unwrap_data!(dir.key_history(&AkdLabel::from(&username), params).await);
+    let to_ret = UserHistoryRet {
+        epoch_hash : EpochHashSerializable::from(hash),
+        proof : proof,
+    };
+    actix_web::HttpResponse::Ok().json(to_ret)
 }
 
 #[get("/audit")]
-async fn audit_directory<'a>(mut body: Payload, data: web::Data<ASData>) -> impl Responder {
-    actix_web::HttpResponse::Ok().finish()
+async fn audit_directory<'a>(mut query: web::Query<AuditQuery>, data: web::Data<ASData>) -> impl Responder {
+    let dir = data.directory.lock().unwrap();
+    if query.end_epoch == std::u64::MAX {
+        query.end_epoch = unwrap_data!(dir.get_epoch_hash().await).0;
+    }
+    let result = unwrap_data!(dir.audit(query.start_epoch, query.end_epoch).await);
+    actix_web::HttpResponse::Ok().json(result)
 }
 
 // === Main function driving the AS ===
@@ -238,7 +261,6 @@ async fn main() -> std::io::Result<()> {
             .app_data(data.clone())
             .service(get_public_key_request)
             .service(add_user)
-            .service(update_user)
             .service(lookup_user)
             .service(user_history)
             .service(audit_directory)
