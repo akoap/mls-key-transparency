@@ -69,6 +69,15 @@ macro_rules! unwrap_data {
     };
 }
 
+macro_rules! unwrap_dir {
+    ( $e:expr ) => {
+        match $e {
+            Some(x) => x,
+            None => return actix_web::HttpResponse::InternalServerError().finish(),
+        }
+    };
+}
+
 macro_rules! unwrap_parse_json {
     ( $e:expr ) => {
         match $e {
@@ -111,9 +120,9 @@ fn to_akd_value(input:&mut Vec<Vec<u8>>) -> Result<AkdValue> {
     Ok(AkdValue(result))
 }
 
-// fn from_akd_value(input:&mut AkdValue) -> Result<Vec<&[u8]>> {
-//     let fmt = asn1::parse_single::<AKDValueFormat>(input.0)?;
-//     let toRet = Vec::<&[u8]>::new();
+// fn from_akd_value(input:&mut AkdValue) -> Result<Vec<Vec<u8>>> {
+//     let fmt = AKDValueFormat::from_der(input.0)?;
+//     let toRet = Vec::<Vec<u8>>::new();
 //     for elem in fmt.vec.iter() {
 //         toRet.append(asn1::write_single(&elem)?);
 //     }
@@ -182,7 +191,7 @@ async fn audit_directory<'a>(mut body: Payload, data: web::Data<ASData<'a>>) -> 
     actix_web::HttpResponse::Ok().finish()
 }
 
-// === Main function driving the DS ===
+// === Main function driving the AS ===
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -204,11 +213,12 @@ async fn main() -> std::io::Result<()> {
 
     // The data this app operates on.
     // TODO: Fine tune configuration, storage, and VRF
-    let database = AsyncInMemoryDatabase::new();
-    let storage_manager = StorageManager::new_no_cache(database);
-    let vrf = HardCodedAkdVRF{};
-    let mut directory = Directory::<Config, _, _>::new(storage_manager, vrf).await.expect("Could not create AKD directory.");
-    let data = web::Data::new(ASData::init(&mut directory));
+    static mut database: AsyncInMemoryDatabase = AsyncInMemoryDatabase::new();
+    static mut storage_manager: StorageManager<AsyncInMemoryDatabase> = StorageManager::new_no_cache(database);
+    static mut vrf: HardCodedAkdVRF = HardCodedAkdVRF{};
+    static mut directory: Option<Directory<Config, AsyncInMemoryDatabase, HardCodedAkdVRF>> = None;
+    directory = Some(Directory::<Config, _, _>::new(storage_manager, vrf).await.expect("Could not create AKD directory."));
+    let data = web::Data::new(ASData::init(&mut unwrap_dir!(directory)));
 
     // Set default port or use port provided on the command line.
     let port = matches.get_one("port").unwrap_or(&8000u16);
