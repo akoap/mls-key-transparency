@@ -13,6 +13,32 @@ use der::{Decode, Encode};
 
 use ed25519_dalek::pkcs8::*;
 use ed25519_dalek::*;
+pub mod serde_helpers {
+    use hex::{FromHex, ToHex};
+    use serde::Deserialize;
+
+    /// A serde hex serializer for bytes
+    pub fn bytes_serialize_hex<S, T>(x: &T, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+        T: AsRef<[u8]>,
+    {
+        let hex_str = &x.as_ref().encode_hex_upper::<String>();
+        s.serialize_str(hex_str)
+    }
+
+    /// A serde hex deserializer for bytes
+    pub fn bytes_deserialize_hex<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+        T: AsRef<[u8]> + FromHex,
+        <T as FromHex>::Error: core::fmt::Display,
+    {
+        let hex_str = String::deserialize(deserializer)?;
+        T::from_hex(hex_str).map_err(serde::de::Error::custom)
+    }
+
+}
 
 type Config = akd::WhatsAppV1Configuration;
 
@@ -20,6 +46,8 @@ type Config = akd::WhatsAppV1Configuration;
 #[derive(Serialize, Deserialize)]
 pub struct EpochHashSerializable {
     epoch: u64,
+    #[serde(serialize_with = "serde_helpers::bytes_serialize_hex")]
+    #[serde(deserialize_with = "serde_helpers::bytes_deserialize_hex")]
     digest: [u8; 32],
 }
 
@@ -69,14 +97,23 @@ pub enum ASHashAlgorithm {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct GetPubKeyRet {
     hash_algorithm: ASHashAlgorithm,
+    #[serde(serialize_with = "serde_helpers::bytes_serialize_hex")]
+    #[serde(deserialize_with = "serde_helpers::bytes_deserialize_hex")]
     public_key: Vec<u8>, // DER encoded public key
 }
+
+#[derive(Serialize, Deserialize, Default, Debug)]
+pub struct PubKeyBuf(
+    #[serde(serialize_with = "serde_helpers::bytes_serialize_hex")]
+    #[serde(deserialize_with = "serde_helpers::bytes_deserialize_hex")]
+    Vec<u8>
+);
 
 // The struct defining the input to the add user endpoint
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct AddUserInput {
     username: String,
-    public_keys: Vec<Vec<u8>>, // Sequence of DER encoded public keys
+    public_keys: Vec<PubKeyBuf>, // Sequence of DER encoded public keys
 }
 
 // The struct defining the output from the lookup user endpoint
@@ -134,14 +171,14 @@ impl Default for AuditQuery {
 }
 
 // Public function to convert a vector of DER encoded public keys into the Akd value used
-pub fn to_akd_value(input: &mut Vec<Vec<u8>>) -> Result<AkdValue> {
+pub fn to_akd_value(input: &mut Vec<PubKeyBuf>) -> Result<AkdValue> {
     // Initialize the helper struct defined above
     let mut to_write = AKDValueFormat {
         vec: Vec::<asn1::Any>::new(),
     };
     // Ierate through each public key in the input, convert it, and add it to the output
     for elem in input.iter() {
-        to_write.vec.push(asn1::Any::from_der(&elem)?);
+        to_write.vec.push(asn1::Any::from_der(&elem.0.as_ref())?);
     }
     // Convert from the helper struct to the final binary blob
     let result = to_write.to_der().unwrap();
@@ -165,10 +202,6 @@ pub fn from_akd_value(input:&mut AkdValue) -> Result<Vec<Vec<u8>>> {
 
 // === API ===
 
-/// Registering a new client takes a serialised `ClientInfo` object and returns
-/// a simple "Welcome {client name}" on success.
-/// An HTTP conflict (409) is returned if a client with this name exists
-/// already.
 #[get("/public_key")]
 async fn get_public_key_request<'a>(data: web::Data<ASData>) -> impl Responder {
     // First get the correct public key
