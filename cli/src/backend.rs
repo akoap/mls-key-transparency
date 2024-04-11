@@ -12,6 +12,7 @@ use openmls::prelude::*;
 
 pub struct Backend {
     ds_url: Url,
+    as_url: Url,
 }
 
 impl Backend {
@@ -111,6 +112,17 @@ impl Backend {
         url.set_path("reset");
         get(&url).unwrap();
     }
+
+    // Add user to AKD
+    pub fn add_user_akd(&self, addUserInput: &AddUserInput) -> Result<EpochHashSerializable, String> {
+        let mut url = self.as_url.clone();
+        url.set_path("add_user");
+        let response = post(&url, addUserInput)?;
+        match serde_json::from_slice::<EpochHashSerializable>(&response) {
+            Ok(r) => Ok(r),
+            Err(e) => Err(format!("Error decoding server response: {e:?}")),
+        }
+    }
 }
 
 impl Default for Backend {
@@ -118,6 +130,7 @@ impl Default for Backend {
         Self {
             // There's a public DS at https://mls.franziskuskiefer.de
             ds_url: Url::parse("http://localhost:8080").unwrap(),
+            as_url: Url::parse("http://localhost:8000").unwrap(),
         }
     }
 }
