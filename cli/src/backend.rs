@@ -2,7 +2,8 @@ use tls_codec::{Deserialize, TlsVecU16, TlsVecU32};
 use url::Url;
 
 use super::{
-    networking::{get, post},
+    ds_networking,
+    as_networking,
     user::User,
 };
 
@@ -28,7 +29,7 @@ impl Backend {
                 .map(|(b, kp)| (b, KeyPackageIn::from(kp)))
                 .collect(),
         );
-        let response = post(&url, &client_info)?;
+        let response = ds_networking::post(&url, &client_info)?;
 
         Ok(String::from_utf8(response).unwrap())
     }
@@ -39,7 +40,7 @@ impl Backend {
         let mut url = self.ds_url.clone();
         url.set_path("/clients/list");
 
-        let response = get(&url)?;
+        let response = ds_networking::get(&url)?;
         match TlsVecU32::<ClientInfo>::tls_deserialize(&mut response.as_slice()) {
             Ok(clients) => Ok(clients.into()),
             Err(e) => Err(format!("Error decoding server response: {e:?}")),
@@ -53,7 +54,7 @@ impl Backend {
             + &base64::encode_config(client_id, base64::URL_SAFE);
         url.set_path(&path);
 
-        let response = get(&url)?;
+        let response = ds_networking::get(&url)?;
         match KeyPackageIn::tls_deserialize(&mut response.as_slice()) {
             Ok(kp) => Ok(kp),
             Err(e) => Err(format!("Error decoding server response: {e:?}")),
@@ -68,7 +69,7 @@ impl Backend {
         url.set_path(&path);
 
         // The response should be empty.
-        let _response = post(&url, &ckp)?;
+        let _response = ds_networking::post(&url, &ckp)?;
         Ok(())
     }
 
@@ -78,7 +79,7 @@ impl Backend {
         url.set_path("/send/welcome");
 
         // The response should be empty.
-        let _response = post(&url, welcome_msg)?;
+        let _response = ds_networking::post(&url, welcome_msg)?;
         Ok(())
     }
 
@@ -88,7 +89,7 @@ impl Backend {
         url.set_path("/send/message");
 
         // The response should be empty.
-        let _response = post(&url, group_msg)?;
+        let _response = ds_networking::post(&url, group_msg)?;
         Ok(())
     }
 
@@ -99,7 +100,7 @@ impl Backend {
             + &base64::encode_config(user.identity.borrow().identity(), base64::URL_SAFE);
         url.set_path(&path);
 
-        let response = get(&url)?;
+        let response = ds_networking::get(&url)?;
         match TlsVecU16::<MlsMessageIn>::tls_deserialize(&mut response.as_slice()) {
             Ok(r) => Ok(r.into()),
             Err(e) => Err(format!("Invalid message list: {e:?}")),
@@ -110,14 +111,14 @@ impl Backend {
     pub fn reset_server(&self) {
         let mut url = self.ds_url.clone();
         url.set_path("reset");
-        get(&url).unwrap();
+        ds_networking::get(&url).unwrap();
     }
 
     // Add user to AKD
-    pub fn add_user_akd(&self, addUserInput: &AddUserInput) -> Result<EpochHashSerializable, String> {
+    pub fn add_user_akd(&self, add_user_input: &AddUserInput) -> Result<EpochHashSerializable, String> {
         let mut url = self.as_url.clone();
         url.set_path("add_user");
-        let response = post(&url, addUserInput)?;
+        let response = as_networking::post(&url, add_user_input)?;
         match serde_json::from_slice::<EpochHashSerializable>(&response) {
             Ok(r) => Ok(r),
             Err(e) => Err(format!("Error decoding server response: {e:?}")),
