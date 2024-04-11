@@ -137,6 +137,17 @@ impl Backend {
             Err(e) => Err(format!("Error decoding server response: {e:?}")),
         }
     }
+
+    // Get public key of server
+    pub fn get_public_key(&self) -> Result<GetPubKeyRet, String> {
+        let mut url = self.as_url.clone();
+        url.set_path("public_key");
+        let response = as_networking::get(&url)?;
+        match serde_json::from_slice::<GetPubKeyRet>(&response) {
+            Ok(r) => Ok(r),
+            Err(e) => Err(format!("Error decoding server response: {e:?}")),
+        }
+    }
 }
 
 impl Default for Backend {
