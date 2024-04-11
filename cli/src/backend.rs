@@ -7,6 +7,7 @@ use super::{
 };
 
 use ds_lib::*;
+use as_lib::*;
 use openmls::prelude::*;
 
 pub struct Backend {

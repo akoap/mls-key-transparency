@@ -1,65 +1,21 @@
 use actix_web::{get, post, web, App, HttpServer, Responder};
 use clap::Command;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Mutex;
 
+use as_lib::*;
 use akd::directory::Directory;
 use akd::ecvrf::HardCodedAkdVRF;
 use akd::storage::memory::AsyncInMemoryDatabase;
 use akd::storage::StorageManager;
-use akd::{AkdLabel, AkdValue, HistoryProof, LookupProof};
+use akd::{AkdLabel, AkdValue};
 use der::asn1;
 use der::{Decode, Encode};
-
 use ed25519_dalek::pkcs8::*;
 use ed25519_dalek::*;
-pub mod serde_helpers {
-    use hex::{FromHex, ToHex};
-    use serde::Deserialize;
 
-    /// A serde hex serializer for bytes
-    pub fn bytes_serialize_hex<S, T>(x: &T, s: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-        T: AsRef<[u8]>,
-    {
-        let hex_str = &x.as_ref().encode_hex_upper::<String>();
-        s.serialize_str(hex_str)
-    }
-
-    /// A serde hex deserializer for bytes
-    pub fn bytes_deserialize_hex<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-        T: AsRef<[u8]> + FromHex,
-        <T as FromHex>::Error: core::fmt::Display,
-    {
-        let hex_str = String::deserialize(deserializer)?;
-        T::from_hex(hex_str).map_err(serde::de::Error::custom)
-    }
-
-}
 
 type Config = akd::WhatsAppV1Configuration;
-
-// The EpochHash struct was not mads serializable by the creators of AKD, so we make an equivalent struct here that is serializable
-#[derive(Serialize, Deserialize)]
-pub struct EpochHashSerializable {
-    epoch: u64,
-    #[serde(serialize_with = "serde_helpers::bytes_serialize_hex")]
-    #[serde(deserialize_with = "serde_helpers::bytes_deserialize_hex")]
-    digest: [u8; 32],
-}
-
-// To make conversions from the akd struct to our struct easier, define this as a function (there's already a fairly simple mapping between mambers of the two structs)
-impl From<akd::helper_structs::EpochHash> for EpochHashSerializable {
-    fn from(item: akd::helper_structs::EpochHash) -> Self {
-        EpochHashSerializable {
-            epoch: item.0,
-            digest: item.1,
-        }
-    }
-}
 
 /// The AS state.
 /// It holds the state for this application.
@@ -84,50 +40,6 @@ macro_rules! unwrap_data {
             Err(_) => return actix_web::HttpResponse::InternalServerError().finish(),
         }
     };
-}
-
-// Tells the calling code what hash algorithm we are using
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub enum ASHashAlgorithm {
-    #[default]
-    Sha256,
-}
-
-// The struct defining the output from the get public key endpoint
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct GetPubKeyRet {
-    hash_algorithm: ASHashAlgorithm,
-    #[serde(serialize_with = "serde_helpers::bytes_serialize_hex")]
-    #[serde(deserialize_with = "serde_helpers::bytes_deserialize_hex")]
-    public_key: Vec<u8>, // DER encoded public key
-}
-
-#[derive(Serialize, Deserialize, Default, Debug)]
-pub struct PubKeyBuf(
-    #[serde(serialize_with = "serde_helpers::bytes_serialize_hex")]
-    #[serde(deserialize_with = "serde_helpers::bytes_deserialize_hex")]
-    Vec<u8>
-);
-
-// The struct defining the input to the add user endpoint
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct AddUserInput {
-    username: String,
-    public_keys: Vec<PubKeyBuf>, // Sequence of DER encoded public keys
-}
-
-// The struct defining the output from the lookup user endpoint
-#[derive(Serialize, Deserialize)]
-pub struct LookupUserRet{
-    epoch_hash : EpochHashSerializable,
-    proof : LookupProof
-}
-
-// The struct defining the output from the get user history endpoint
-#[derive(Serialize, Deserialize)]
-pub struct UserHistoryRet{
-    epoch_hash : EpochHashSerializable,
-    proof : HistoryProof
 }
 
 // Private struct used to serialize a vector of DER encoded public keys into one DER-encoded blob using the Sequence of functionality of the der library
@@ -158,16 +70,6 @@ impl Default for HistoryParamsQuery {
 struct AuditQuery {
     start_epoch:u64,
     end_epoch:u64
-}
-
-// Override the default values to ensure the output is sane
-impl Default for AuditQuery {
-    fn default() -> Self {
-        AuditQuery {
-            start_epoch: std::u64::MIN,
-            end_epoch: std::u64::MAX
-        }
-    }
 }
 
 // Public function to convert a vector of DER encoded public keys into the Akd value used
