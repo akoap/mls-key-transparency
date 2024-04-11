@@ -1,14 +1,10 @@
 use tls_codec::{Deserialize, TlsVecU16, TlsVecU32};
 use url::Url;
 
-use super::{
-    ds_networking,
-    as_networking,
-    user::User,
-};
+use super::{as_networking, ds_networking, user::User};
 
-use ds_lib::*;
 use as_lib::*;
+use ds_lib::*;
 use openmls::prelude::*;
 
 pub struct Backend {
@@ -115,11 +111,28 @@ impl Backend {
     }
 
     // Add user to AKD
-    pub fn add_user_akd(&self, add_user_input: &AddUserInput) -> Result<EpochHashSerializable, String> {
+    pub fn add_user_akd(
+        &self,
+        add_user_input: &AddUserInput,
+    ) -> Result<EpochHashSerializable, String> {
         let mut url = self.as_url.clone();
         url.set_path("add_user");
         let response = as_networking::post(&url, add_user_input)?;
         match serde_json::from_slice::<EpochHashSerializable>(&response) {
+            Ok(r) => Ok(r),
+            Err(e) => Err(format!("Error decoding server response: {e:?}")),
+        }
+    }
+
+    // Lookup user key in AKD
+    pub fn lookup_user(&self, user: &User) -> Result<LookupUserRet, String> {
+        let mut url = self.as_url.clone();
+        let path = "/".to_string()
+            + &base64::encode_config(user.identity.borrow().identity(), base64::URL_SAFE)
+            + "/lookup";
+        url.set_path(&path);
+        let response = as_networking::get(&url)?;
+        match serde_json::from_slice::<LookupUserRet>(&response) {
             Ok(r) => Ok(r),
             Err(e) => Err(format!("Error decoding server response: {e:?}")),
         }
