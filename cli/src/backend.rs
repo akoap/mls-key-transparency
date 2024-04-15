@@ -1,13 +1,14 @@
 use tls_codec::{Deserialize, TlsVecU16, TlsVecU32};
 use url::Url;
 
-use crate::networking::get_with_body;
+use crate::networking::get_with_body_ds;
 
 use super::{
-    networking::{get, post},
+    networking::{get_ds, post_ds, get_as, post_as},
     user::User,
 };
 
+use as_lib::*;
 use ds_lib::{
     messages::{
         AuthToken, PublishKeyPackagesRequest, RecvMessageRequest, RegisterClientRequest,
@@ -19,6 +20,7 @@ use openmls::prelude::*;
 
 pub struct Backend {
     ds_url: Url,
+    as_url: Url,
 }
 
 impl Backend {
@@ -38,7 +40,7 @@ impl Backend {
                 .into(),
         );
         let request = RegisterClientRequest { key_packages };
-        let response_bytes = post(&url, &request)?;
+        let response_bytes = post_ds(&url, &request)?;
         let response =
             RegisterClientSuccessResponse::tls_deserialize(&mut response_bytes.as_slice())
                 .map_err(|e| format!("Error decoding server response: {e:?}"))?;
@@ -52,7 +54,7 @@ impl Backend {
         let mut url = self.ds_url.clone();
         url.set_path("/clients/list");
 
-        let response = get(&url)?;
+        let response = get_ds(&url)?;
         match TlsVecU32::<Vec<u8>>::tls_deserialize(&mut response.as_slice()) {
             Ok(clients) => Ok(clients.into()),
             Err(e) => Err(format!("Error decoding server response: {e:?}")),
@@ -66,7 +68,7 @@ impl Backend {
             + &base64::encode_config(client_id, base64::URL_SAFE);
         url.set_path(&path);
 
-        let response = get(&url)?;
+        let response = get_ds(&url)?;
         match KeyPackageIn::tls_deserialize(&mut response.as_slice()) {
             Ok(kp) => Ok(kp),
             Err(e) => Err(format!("Error decoding server response: {e:?}")),
@@ -89,7 +91,7 @@ impl Backend {
         };
 
         // The response should be empty.
-        let _response = post(&url, &request)?;
+        let _response = post_ds(&url, &request)?;
         Ok(())
     }
 
@@ -99,7 +101,7 @@ impl Backend {
         url.set_path("/send/welcome");
 
         // The response should be empty.
-        let _response = post(&url, welcome_msg)?;
+        let _response = post_ds(&url, welcome_msg)?;
         Ok(())
     }
 
@@ -109,7 +111,7 @@ impl Backend {
         url.set_path("/send/message");
 
         // The response should be empty.
-        let _response = post(&url, group_msg)?;
+        let _response = post_ds(&url, group_msg)?;
         Ok(())
     }
 
@@ -127,7 +129,7 @@ impl Backend {
             auth_token: auth_token.clone(),
         };
 
-        let response = get_with_body(&url, &request)?;
+        let response = get_with_body_ds(&url, &request)?;
         match TlsVecU16::<MlsMessageIn>::tls_deserialize(&mut response.as_slice()) {
             Ok(r) => Ok(r.into()),
             Err(e) => Err(format!("Invalid message list: {e:?}")),
@@ -138,7 +140,46 @@ impl Backend {
     pub fn reset_server(&self) {
         let mut url = self.ds_url.clone();
         url.set_path("reset");
-        get(&url).unwrap();
+        get_ds(&url).unwrap();
+    }
+
+    // Add user to AKD
+    pub fn add_user_akd(
+        &self,
+        add_user_input: &AddUserInput,
+    ) -> Result<EpochHashSerializable, String> {
+        let mut url = self.as_url.clone();
+        url.set_path("add_user");
+        let response = post_as(&url, add_user_input)?;
+        match serde_json::from_slice::<EpochHashSerializable>(&response) {
+            Ok(r) => Ok(r),
+            Err(e) => Err(format!("Error decoding server response: {e:?}")),
+        }
+    }
+
+    // Lookup user key in AKD
+    pub fn lookup_user(&self, user: &User) -> Result<LookupUserRet, String> {
+        let mut url = self.as_url.clone();
+        let path = "/".to_string()
+            + &base64::encode_config(user.identity.borrow().identity(), base64::URL_SAFE)
+            + "/lookup";
+        url.set_path(&path);
+        let response = get_as(&url)?;
+        match serde_json::from_slice::<LookupUserRet>(&response) {
+            Ok(r) => Ok(r),
+            Err(e) => Err(format!("Error decoding server response: {e:?}")),
+        }
+    }
+
+    // Get public key of server
+    pub fn get_public_key(&self) -> Result<GetPubKeyRet, String> {
+        let mut url = self.as_url.clone();
+        url.set_path("public_key");
+        let response = get_as(&url)?;
+        match serde_json::from_slice::<GetPubKeyRet>(&response) {
+            Ok(r) => Ok(r),
+            Err(e) => Err(format!("Error decoding server response: {e:?}")),
+        }
     }
 }
 
@@ -147,6 +188,7 @@ impl Default for Backend {
         Self {
             // There's a public DS at https://mls.franziskuskiefer.de
             ds_url: Url::parse("http://localhost:8080").unwrap(),
+            as_url: Url::parse("http://localhost:8000").unwrap(),
         }
     }
 }
