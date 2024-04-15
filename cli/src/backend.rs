@@ -6,6 +6,7 @@ use crate::networking::get_with_body_ds;
 use super::{
     networking::{get_ds, post_ds, get_as, post_as},
     user::User,
+    file_helpers
 };
 
 use as_lib::*;
@@ -141,6 +142,7 @@ impl Backend {
         let mut url = self.ds_url.clone();
         url.set_path("reset");
         get_ds(&url).unwrap();
+        file_helpers::delete_files_with_prefix("openmls_cli").expect("Error deleting files with prefix openmls_cli");
     }
 
     // Add user to AKD
