@@ -13,7 +13,6 @@ pretty_env_logger = "0.4"
 
 openmls = { path = "../openmls", features = ["test-utils"] }
 ds-lib = { path = "../delivery_service/ds-lib" }
-as-lib = { path = "../authentication_service/as-lib" }
 openmls_traits = { path = "../traits" }
 openmls_rust_crypto = { path = "../openmls_rust_crypto" }
 openmls_memory_keystore = { path = "../memory_keystore" }
