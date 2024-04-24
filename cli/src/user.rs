@@ -8,9 +8,9 @@ use std::{cell::RefCell, collections::HashMap, str};
 use as_lib::*;
 use ds_lib::messages::AuthToken;
 use ds_lib::{ClientKeyPackages, GroupMessage};
+use ed25519_dalek::{pkcs8::EncodePublicKey, VerifyingKey};
 use openmls::prelude::{tls_codec::*, *};
 use openmls_traits::OpenMlsProvider;
-use serde::Serialize;
 
 use super::{
     backend::Backend, conversation::Conversation, conversation::ConversationMessage, file_helpers,
@@ -224,9 +224,28 @@ impl User {
                 log::debug!("Created new user: {:?}", self.username());
                 self.set_auth_token(token);
 
-                let pub_key_buf = PubKeyBuf {
-                    0: self.identity.borrow().identity().to_vec(),
-                };
+                /*
+                let pub_key_plain = unwrap_data!(dir.get_public_key().await).to_bytes();
+                // Then we need to do multiple steps to convert it to the correct format (warning: rearranging this into fewer lines might cause it not to compile)
+                let pub_key_obj =
+                    unwrap_data!(unwrap_data!(VerifyingKey::from_bytes(&pub_key_plain)).to_public_key_der());
+                let pub_key_der = pub_key_obj.as_bytes();
+                 */
+                let borrowed_public_key = self
+                    .identity
+                    .borrow();
+                let public_key = borrowed_public_key
+                    .credential_with_key
+                    .signature_key
+                    .as_slice();
+                let mut public_key_32: [u8; 32] = [0; 32];
+                public_key_32.copy_from_slice(public_key);
+                let public_key_obj = VerifyingKey::from_bytes(&public_key_32)
+                    .expect("Failed to convert public key bytes to object")
+                    .to_public_key_der()
+                    .expect("Failed to convert public key to der format");
+                let pub_key_der = public_key_obj.as_bytes();
+                let pub_key_buf = PubKeyBuf { 0: pub_key_der.to_vec() };
                 let add_user_input = AddUserInput {
                     username: self.username(),
                     public_keys: vec![pub_key_buf],
