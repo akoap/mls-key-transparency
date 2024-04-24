@@ -5,10 +5,12 @@ use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
 use std::{cell::RefCell, collections::HashMap, str};
 
+use as_lib::*;
 use ds_lib::messages::AuthToken;
 use ds_lib::{ClientKeyPackages, GroupMessage};
 use openmls::prelude::{tls_codec::*, *};
 use openmls_traits::OpenMlsProvider;
+use serde::Serialize;
 
 use super::{
     backend::Backend, conversation::Conversation, conversation::ConversationMessage, file_helpers,
@@ -220,7 +222,21 @@ impl User {
         match self.backend.register_client(self.key_packages()) {
             Ok(token) => {
                 log::debug!("Created new user: {:?}", self.username());
-                self.set_auth_token(token)
+                self.set_auth_token(token);
+
+                let pub_key_buf = PubKeyBuf {
+                    0: self.identity.borrow().identity().to_vec(),
+                };
+                let add_user_input = AddUserInput {
+                    username: self.username(),
+                    public_keys: vec![pub_key_buf],
+                };
+                match self.backend.add_user_akd(&add_user_input) {
+                    Ok(_epoch_hash_serializable) => {
+                        log::debug!("User added to directory: {:?}", self.username());
+                    }
+                    Err(e) => log::error!("Error adding user to Akd: {:?}", e),
+                }
             }
             Err(e) => log::error!("Error creating user: {:?}", e),
         }

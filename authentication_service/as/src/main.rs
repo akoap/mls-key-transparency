@@ -1,6 +1,5 @@
 use actix_web::{get, post, web, App, HttpServer, Responder};
 use clap::Command;
-use serde::Deserialize;
 use std::sync::Mutex;
 
 use as_lib::*;
@@ -8,9 +7,7 @@ use akd::directory::Directory;
 use akd::ecvrf::HardCodedAkdVRF;
 use akd::storage::memory::AsyncInMemoryDatabase;
 use akd::storage::StorageManager;
-use akd::{AkdLabel, AkdValue};
-use der::asn1;
-use der::{Decode, Encode};
+use akd::AkdLabel;
 use ed25519_dalek::pkcs8::*;
 use ed25519_dalek::*;
 
@@ -42,65 +39,6 @@ macro_rules! unwrap_data {
     };
 }
 
-// Private struct used to serialize a vector of DER encoded public keys into one DER-encoded blob using the Sequence of functionality of the der library
-#[derive(der::Sequence)]
-struct AKDValueFormat {
-    vec: Vec<asn1::Any>,
-}
-
-// Private struct defining the query parameters used to control the get user history endpoint
-#[derive(Deserialize)]
-struct HistoryParamsQuery {
-    most_recent:usize,
-    since_epoch:u64
-}
-
-// Override the default values to ensure the output is sane
-impl Default for HistoryParamsQuery {
-    fn default() -> Self {
-        HistoryParamsQuery {
-            most_recent: std::usize::MIN,
-            since_epoch: std::u64::MAX
-        }
-    }
-}
-
-// Private struct defining the query parameters used to control the audit endpoint
-#[derive(Deserialize)]
-struct AuditQuery {
-    start_epoch:u64,
-    end_epoch:u64
-}
-
-// Public function to convert a vector of DER encoded public keys into the Akd value used
-pub fn to_akd_value(input: &mut Vec<PubKeyBuf>) -> Result<AkdValue> {
-    // Initialize the helper struct defined above
-    let mut to_write = AKDValueFormat {
-        vec: Vec::<asn1::Any>::new(),
-    };
-    // Ierate through each public key in the input, convert it, and add it to the output
-    for elem in input.iter() {
-        to_write.vec.push(asn1::Any::from_der(&elem.0.as_ref())?);
-    }
-    // Convert from the helper struct to the final binary blob
-    let result = to_write.to_der().unwrap();
-    // Return the converted value
-    Ok(AkdValue(result))
-}
-
-// Public function to convert a Akd value used into a vector of DER encoded public keys
-pub fn from_akd_value(input:&mut AkdValue) -> Result<Vec<Vec<u8>>> {
-    // Convert the binary blob to the helper struct above
-    let fmt = AKDValueFormat::from_der(&input.0)?;
-    // Initialize the return value
-    let mut to_ret = Vec::<Vec<u8>>::new();
-    // Cycle through every element in the helper struct and convert it to the output format, adding it to the return value
-    for elem in fmt.vec.iter() {
-        to_ret.push(elem.value().to_vec());
-    }
-    // Return the converted value
-    Ok(to_ret)
-}
 
 // === API ===
 
