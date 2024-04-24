@@ -62,7 +62,7 @@ fn get_internal_ds(url: &Url, msg: Option<&impl tls_codec::Serialize>) -> Result
 
 pub fn post_as(url: &Url, msg: &impl serde::Serialize) -> Result<Vec<u8>, String> {
     log::debug!("Post {:?}", url);
-    // log::debug!("Payload: {:?}", serialized_msg);
+    log::debug!("Payload as json: {:?}", json!(msg));
 
     let client = Client::new();
     let response = client
