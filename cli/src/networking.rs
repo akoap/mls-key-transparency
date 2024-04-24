@@ -1,5 +1,6 @@
 use ds_lib::messages::AuthToken;
 use reqwest::{self, blocking::Client, StatusCode};
+use serde_json::json;
 use url::Url;
 
 use openmls::prelude::tls_codec;
@@ -60,14 +61,13 @@ fn get_internal_ds(url: &Url, msg: Option<&impl tls_codec::Serialize>) -> Result
 }
 
 pub fn post_as(url: &Url, msg: &impl serde::Serialize) -> Result<Vec<u8>, String> {
-    let serialized_msg = serde_json::to_string(msg).map_err(|e| format!("Error serializing message: {:?}", e))?;
     log::debug!("Post {:?}", url);
-    log::debug!("Payload: {:?}", serialized_msg);
+    // log::debug!("Payload: {:?}", serialized_msg);
 
     let client = Client::new();
     let response = client
         .post(url.to_string())
-        .body(serialized_msg)
+        .json(&msg)
         .send()
         .map_err(|e| format!("Error sending request: {:?}", e))?; // Handle request send error
 
