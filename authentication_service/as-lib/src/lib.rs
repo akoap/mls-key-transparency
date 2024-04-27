@@ -53,7 +53,7 @@ impl From<akd::helper_structs::EpochHash> for EpochHashSerializable {
 }
 
 // Tells the calling code what hash algorithm we are using
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ASHashAlgorithm {
     #[default]
     Sha256,

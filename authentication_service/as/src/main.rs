@@ -10,6 +10,7 @@ use akd::storage::StorageManager;
 use akd::AkdLabel;
 use ed25519_dalek::pkcs8::*;
 use ed25519_dalek::*;
+use urlencoding;
 
 
 type Config = akd::WhatsAppV1Configuration;
@@ -77,7 +78,7 @@ async fn add_user<'a>(mut json: web::Json<AddUserInput>, data: web::Data<ASData>
 #[get("/{username}/lookup")]
 async fn lookup_user<'a>(path: web::Path<String>, data: web::Data<ASData>) -> impl Responder {
     // The username we get from the url used (not sure if this handles url encoding)
-    let username = path.into_inner();
+    let username = unwrap_data!(urlencoding::decode(path.into_inner().as_str())).into_owned();
     // Perform the lookup, format the output, and return it
     let dir = data.directory.lock().unwrap();
     let (proof, hash) = unwrap_data!(dir.lookup(AkdLabel::from(&username)).await);
@@ -91,7 +92,7 @@ async fn lookup_user<'a>(path: web::Path<String>, data: web::Data<ASData>) -> im
 #[get("/{username}/history")]
 async fn user_history<'a>(path: web::Path<String>, query: web::Query<HistoryParamsQuery>, data: web::Data<ASData>) -> impl Responder {
     // The username we get from the url used (not sure if this handles url encoding)
-    let username = path.into_inner();
+    let username = unwrap_data!(urlencoding::decode(path.into_inner().as_str())).into_owned();
     // Since the HistoryParams enum was not made serializable, we use query parameters instead of it
     let mut params = akd::directory::HistoryParams::Complete;
     // If most recent query parameter was set, use it

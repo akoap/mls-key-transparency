@@ -5,6 +5,8 @@ use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
 use std::{cell::RefCell, collections::HashMap, str};
 
+use akd::verify::VerificationError;
+use akd::VerifyResult;
 use as_lib::*;
 use ds_lib::messages::AuthToken;
 use ds_lib::{ClientKeyPackages, GroupMessage};
@@ -55,6 +57,7 @@ pub struct User {
     crypto: OpenMlsRustPersistentCrypto,
     autosave_enabled: bool,
     auth_token: Option<AuthToken>,
+    epoch_added: Option<u64>,
 }
 
 #[derive(PartialEq)]
@@ -76,6 +79,7 @@ impl User {
             crypto,
             autosave_enabled: false,
             auth_token: None,
+            epoch_added: None,
         };
         out
     }
@@ -167,6 +171,47 @@ impl User {
         }
     }
 
+    pub fn check_history(&self, server_public_key:&[u8;32]) -> Result<bool, String> {
+        let user_history = self.backend.get_user_history(self, akd::directory::HistoryParams::Complete)?;
+        let key_history_result: Vec<VerifyResult> = match akd::client::key_history_verify::<akd::WhatsAppV1Configuration>(
+            server_public_key, 
+            user_history.epoch_hash.digest, 
+            user_history.epoch_hash.epoch, 
+            akd::AkdLabel::from(&self.username()), 
+            user_history.proof, 
+            akd::HistoryVerificationParams::Default) {
+                Ok(result) => result,
+                Err(_) => return Ok(false),
+            };
+        // We don't currently support changing signature keys for users, so validate that there's only one key there and that key is the current one
+        if key_history_result.len() == 1 {
+            let borrowed_public_key = self
+                .identity
+                .borrow();
+            let public_key = borrowed_public_key
+                .credential_with_key
+                .signature_key
+                .as_slice();
+            assert!(public_key.len() == 32, "Public Key has wrong type for cipher suite.");
+            let mut public_key_32: [u8; 32] = [0; 32];
+            public_key_32.copy_from_slice(public_key);
+            let public_key_obj = VerifyingKey::from_bytes(&public_key_32)
+                .expect("Failed to convert public key bytes to object")
+                .to_public_key_der()
+                .expect("Failed to convert public key to der format");
+            let pub_key_der = public_key_obj.as_bytes();
+            let pub_key_buf = PubKeyBuf { 0: pub_key_der.to_vec() };
+            let akd_val = match to_akd_value(&mut vec![pub_key_buf]) {
+                Ok(val) => val,
+                Err(_) => return Err("Could not serialize expected AKD value".to_string()),
+            };
+            if key_history_result[0].version == 1 && self.epoch_added == Some(key_history_result[0].epoch) && key_history_result[0].value == akd_val {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+
     pub fn enable_auto_save(&mut self) {
         self.autosave_enabled = true;
     }
@@ -224,13 +269,6 @@ impl User {
                 log::debug!("Created new user: {:?}", self.username());
                 self.set_auth_token(token);
 
-                /*
-                let pub_key_plain = unwrap_data!(dir.get_public_key().await).to_bytes();
-                // Then we need to do multiple steps to convert it to the correct format (warning: rearranging this into fewer lines might cause it not to compile)
-                let pub_key_obj =
-                    unwrap_data!(unwrap_data!(VerifyingKey::from_bytes(&pub_key_plain)).to_public_key_der());
-                let pub_key_der = pub_key_obj.as_bytes();
-                 */
                 let borrowed_public_key = self
                     .identity
                     .borrow();
@@ -238,6 +276,7 @@ impl User {
                     .credential_with_key
                     .signature_key
                     .as_slice();
+                assert!(public_key.len() == 32, "Public Key has wrong type for cipher suite.");
                 let mut public_key_32: [u8; 32] = [0; 32];
                 public_key_32.copy_from_slice(public_key);
                 let public_key_obj = VerifyingKey::from_bytes(&public_key_32)
@@ -253,6 +292,7 @@ impl User {
                 match self.backend.add_user_akd(&add_user_input) {
                     Ok(_epoch_hash_serializable) => {
                         log::debug!("User added to directory: {:?}", self.username());
+                        self.epoch_added = Some(_epoch_hash_serializable.epoch);
                     }
                     Err(e) => log::error!("Error adding user to Akd: {:?}", e),
                 }

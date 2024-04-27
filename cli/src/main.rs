@@ -4,6 +4,9 @@
 
 use std::io::{stdin, stdout, StdoutLock, Write};
 use termion::input::TermRead;
+use ed25519_dalek::{VerifyingKey, pkcs8::DecodePublicKey};
+use as_lib::*;
+use crate::backend::Backend;
 
 mod backend;
 mod conversation;
@@ -25,6 +28,7 @@ const HELP: &str = "
 >>>     - autosave                              enable automatic save of the current client state upon each update
 >>>     - create kp                             create a new key package
 >>>     - create group {group name}             create a new group
+>>>     - check history                         validate the authentication server's key history
 >>>     - group {group name}                    group operations
 >>>         - send {message}                    send message to group
 >>>         - invite {client name}              invite a user to the group
@@ -59,6 +63,10 @@ fn main() {
         .write_all(b" >>> Welcome to the OpenMLS CLI :)\nType help to get a list of commands\n\n")
         .unwrap();
     let mut client = None;
+
+    let server_pub_key_ret = Backend::default().get_public_key().expect("Couldn't retrieve server's public key.");
+    assert!(server_pub_key_ret.hash_algorithm == ASHashAlgorithm::Sha256, "Hash algorithm is unsupported at this time.");
+    let server_pub_key_bytes  = VerifyingKey::from_public_key_der(&server_pub_key_ret.public_key).expect("Public key has wrong type, expected ED25519 key.").to_bytes();
 
     loop {
         stdout.flush().unwrap();
@@ -125,6 +133,34 @@ fn main() {
             }
             continue;
         }
+
+        // Check the user's history on the AS
+        if op == "check history" {
+            if let Some(client) = &mut client {
+                let result = match client.check_history(&server_pub_key_bytes) {
+                    Ok(val) => val,
+                    Err(error) => { 
+                        stdout.write_all([b" >>> Received error: ", error.as_bytes(), b"\n\n"].concat().as_slice()).unwrap();
+                        false
+                    }
+                };
+                if result {
+                    stdout
+                        .write_all(b" >>> Verification Succeeded.\n\n")
+                        .unwrap();
+                } else {
+                    stdout
+                        .write_all(b" >>> Verification Failed.\n\n")
+                        .unwrap();
+                }
+            } else {
+                stdout 
+                    .write_all(b" >>> No client to check history for :(\n\n")
+                    .unwrap();
+            }
+            continue;
+        }
+        
 
         // Enable automatic saving of the client state.
         if op == "autosave" {
