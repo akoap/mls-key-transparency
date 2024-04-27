@@ -102,32 +102,6 @@ pub struct AKDValueFormat {
     pub vec: Vec<asn1::Any>,
 }
 
-// Private struct defining the query parameters used to control the get user history endpoint
-#[derive(Deserialize)]
-pub struct HistoryParamsQuery {
-    pub most_recent: usize,
-    pub since_epoch: u64
-}
-
-
-// Override the default values to ensure the output is sane
-impl Default for HistoryParamsQuery {
-    fn default() -> Self {
-        HistoryParamsQuery {
-            most_recent: std::usize::MIN,
-            since_epoch: std::u64::MAX
-        }
-    }
-}
-
-// Private struct defining the query parameters used to control the audit endpoint
-#[derive(Deserialize)]
-pub struct AuditQuery {
-    pub start_epoch: u64,
-    pub end_epoch: u64
-}
-
-
 // Public function to convert a vector of DER encoded public keys into the Akd value used
 pub fn to_akd_value(input: &mut Vec<PubKeyBuf>) -> Result<AkdValue> {
     // Initialize the helper struct defined above
