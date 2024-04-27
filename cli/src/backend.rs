@@ -193,23 +193,6 @@ impl Backend {
         }
     }
 
-    pub fn audit_as(&self, from_epoch:Option<u64>, to_epoch:Option<u64>) -> Result<akd::AppendOnlyProof, String> {
-        let mut url = self.as_url.clone();
-        url.set_path("audit");
-        match (from_epoch, to_epoch) {
-            (Some(from_n), Some(to_n)) => url.set_query(Some(format!("start_epoch={from_n}&end_epoch={to_n}").as_str())),
-            (Some(n), None) => url.set_query(Some(format!("start_epoch={n}").as_str())),
-            (None, Some(n)) => url.set_query(Some(format!("end_epoch={n}").as_str())),
-            (None, None) => url.set_query(None)
-        }
-        let response = get_as(&url)?;
-        match serde_json::from_slice::<akd::AppendOnlyProof>(&response) {
-            Ok(r) => Ok(r),
-            Err(e) => Err(format!("Error decoding server response: {e:?}")),
-        }
-            
-    }
-
     // Get public key of server
     pub fn get_public_key(&self) -> Result<GetPubKeyRet, String> {
         let mut url = self.as_url.clone();

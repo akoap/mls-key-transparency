@@ -126,7 +126,7 @@ pub fn from_akd_value(input:&mut AkdValue) -> Result<Vec<Vec<u8>>> {
     let mut to_ret = Vec::<Vec<u8>>::new();
     // Cycle through every element in the helper struct and convert it to the output format, adding it to the return value
     for elem in fmt.vec.iter() {
-        to_ret.push(elem.value().to_vec());
+        to_ret.push(elem.to_der()?);
     }
     // Return the converted value
     Ok(to_ret)

@@ -97,7 +97,7 @@ pub mod tests_and_kats;
 
 /// An exported ratchet tree as used in, e.g., [`GroupInfo`](crate::messages::group_info::GroupInfo).
 #[derive(PartialEq, Eq, Clone, Debug, Serialize, Deserialize, TlsSerialize, TlsSize)]
-pub struct RatchetTree(Vec<Option<Node>>);
+pub struct RatchetTree(pub Vec<Option<Node>>);
 
 /// An error during processing of an incoming ratchet tree.
 #[derive(Error, Debug, PartialEq, Clone)]

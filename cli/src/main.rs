@@ -76,7 +76,7 @@ fn main() {
         // There's no persistence. So once the client app stops you have to
         // register a new client.
         if let Some(client_name) = op.strip_prefix("register ") {
-            client = Some(user::User::new(client_name.to_string()));
+            client = Some(user::User::new(client_name.to_string(), &server_pub_key_bytes));
             client.as_mut().unwrap().add_key_package();
             client.as_mut().unwrap().add_key_package();
             client.as_mut().unwrap().register();
@@ -320,19 +320,22 @@ fn main() {
 fn basic_test() {
     // Reset the server before doing anything for testing.
     backend::Backend::default().reset_server();
+    let server_pub_key_ret = Backend::default().get_public_key().expect("Couldn't retrieve server's public key.");
+    assert!(server_pub_key_ret.hash_algorithm == ASHashAlgorithm::Sha256, "Hash algorithm is unsupported at this time.");
+    let server_pub_key_bytes  = VerifyingKey::from_public_key_der(&server_pub_key_ret.public_key).expect("Public key has wrong type, expected ED25519 key.").to_bytes();
 
     const MESSAGE_1: &str = "Thanks for adding me Client1.";
     const MESSAGE_2: &str = "Welcome Client3.";
     const MESSAGE_3: &str = "Thanks so much for the warm welcome! 😊";
 
     // Create one client
-    let mut client_1 = user::User::new("Client1".to_string());
+    let mut client_1 = user::User::new("Client1".to_string(), &server_pub_key_bytes);
 
     // Create another client
-    let mut client_2 = user::User::new("Client2".to_string());
+    let mut client_2 = user::User::new("Client2".to_string(), &server_pub_key_bytes);
 
     // Create another client
-    let mut client_3 = user::User::new("Client3".to_string());
+    let mut client_3 = user::User::new("Client3".to_string(), &server_pub_key_bytes);
 
     // Update the clients to know about the other clients.
     client_1.update(None).unwrap();
