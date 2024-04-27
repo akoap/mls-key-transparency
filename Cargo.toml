@@ -9,6 +9,7 @@ members = [
   "delivery_service/ds",
   "delivery_service/ds-lib",
   "basic_credential",
+  "authentication_service",
 ]
 resolver = "2"
 
