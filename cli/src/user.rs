@@ -710,7 +710,6 @@ impl User {
         let credential = joiner_key_package.unverified_credential();
         let public_key = User::to_der_public_key(credential.signature_key.as_slice())?;
         if !(verified_public_keys.contains(&public_key)) {
-            println!("{:?}:{:?}", verified_public_keys, public_key);
             return Err("Peer Credential could not be verified".to_owned());
         }
 
