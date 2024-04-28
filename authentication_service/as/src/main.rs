@@ -1,5 +1,7 @@
 use actix_web::{get, post, web, App, HttpServer, Responder};
 use clap::Command;
+use url::Url;
+use reqwest;
 use std::sync::Mutex;
 
 use as_lib::*;
@@ -7,12 +9,14 @@ use akd::directory::Directory;
 use akd::ecvrf::HardCodedAkdVRF;
 use akd::storage::memory::AsyncInMemoryDatabase;
 use akd::storage::StorageManager;
-use akd::AkdLabel;
+use akd::{AkdLabel, EpochHash};
 use ed25519_dalek::pkcs8::*;
 use ed25519_dalek::*;
 
 
 type Config = akd::WhatsAppV1Configuration;
+
+const AUDIT_URL: &str = "http://localhost:8100";
 
 /// The AS state.
 /// It holds the state for this application.
@@ -38,7 +42,6 @@ macro_rules! unwrap_data {
         }
     };
 }
-
 
 // === API ===
 
@@ -71,6 +74,23 @@ async fn add_user<'a>(mut json: web::Json<AddUserInput>, data: web::Data<ASData>
     // Add this to the directory and return the serialized output
     let dir = data.directory.lock().unwrap();
     let result = unwrap_data!(dir.publish(to_add).await);
+    drop(dir);
+    // Send a request to audit_service to log the epoch above
+    let mut url = Url::parse(AUDIT_URL).unwrap();
+    url.set_path("/log_epoch");
+    let response = reqwest::Client::new()
+        .post(url)
+        .json(&EpochHashSerializable::from(EpochHash::clone(&result)))
+        .send()
+        .await;
+    match response {
+        Ok(response) => {
+            if response.status() != reqwest::StatusCode::OK {
+                return actix_web::HttpResponse::InternalServerError().body(format!("Error status code {:?}", response.status()));
+            }
+        },
+        Err(e) => return actix_web::HttpResponse::InternalServerError().body(format!("ERROR: {:?}", e)),
+    }
     actix_web::HttpResponse::Ok().json(EpochHashSerializable::from(result))
 }
 
@@ -113,15 +133,18 @@ async fn user_history<'a>(path: web::Path<String>, query: web::Query<HistoryPara
 
 #[get("/audit")]
 async fn audit_directory<'a>(mut query: web::Query<AuditQuery>, data: web::Data<ASData>) -> impl Responder {
+    log::debug!("Received audit query: {:?}", query);
     // For this one we use the parameters and/or their defaults mostly as-is, but we automatically adjust an unset max epoch value to the largest valid value to avoid making the user worry about the current epoch value
     // Since the max allowable epoch value requires an api query, set ourselves up here
     let dir = data.directory.lock().unwrap();
+    log::debug!("got here");
     // Perform the necessary adjustment
     if query.end_epoch == std::u64::MAX {
         query.end_epoch = unwrap_data!(dir.get_epoch_hash().await).0;
     }
     // get the proof and return it after serializing
     let result = unwrap_data!(dir.audit(query.start_epoch, query.end_epoch).await);
+    log::debug!("Audit result: {:?}", result);
     actix_web::HttpResponse::Ok().json(result)
 }
 

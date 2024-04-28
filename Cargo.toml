@@ -10,7 +10,7 @@ members = [
   "delivery_service/ds-lib",
   "basic_credential",
   "authentication_service/as",
-  "authentication_service/as-lib",
+  "authentication_service/as-lib", "audit_service",
 ]
 resolver = "2"
 
