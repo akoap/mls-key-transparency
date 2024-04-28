@@ -137,7 +137,6 @@ async fn audit_directory<'a>(mut query: web::Query<AuditQuery>, data: web::Data<
     // For this one we use the parameters and/or their defaults mostly as-is, but we automatically adjust an unset max epoch value to the largest valid value to avoid making the user worry about the current epoch value
     // Since the max allowable epoch value requires an api query, set ourselves up here
     let dir = data.directory.lock().unwrap();
-    log::debug!("got here");
     // Perform the necessary adjustment
     if query.end_epoch == std::u64::MAX {
         query.end_epoch = unwrap_data!(dir.get_epoch_hash().await).0;

@@ -103,7 +103,7 @@ pub struct AKDValueFormat {
 }
 
 // Private struct defining the query parameters used to control the get user history endpoint
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct HistoryParamsQuery {
     pub most_recent: usize,
     pub since_epoch: u64
