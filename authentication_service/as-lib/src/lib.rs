@@ -34,7 +34,7 @@ pub mod serde_helpers {
 
 
 // The EpochHash struct was not mads serializable by the creators of AKD, so we make an equivalent struct here that is serializable
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug)]
 pub struct EpochHashSerializable {
     pub epoch: u64,
     #[serde(serialize_with = "serde_helpers::bytes_serialize_hex")]
@@ -121,7 +121,7 @@ impl Default for HistoryParamsQuery {
 }
 
 // Private struct defining the query parameters used to control the audit endpoint
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct AuditQuery {
     pub start_epoch: u64,
     pub end_epoch: u64
