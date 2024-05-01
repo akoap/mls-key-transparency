@@ -13,8 +13,6 @@ use akd::{AkdLabel, EpochHash};
 use ed25519_dalek::pkcs8::*;
 use ed25519_dalek::*;
 use urlencoding;
-use serde::Deserialize;
-
 
 type Config = akd::WhatsAppV1Configuration;
 
@@ -132,9 +130,7 @@ async fn user_history<'a>(path: web::Path<String>, query: web::Query<HistoryPara
 }
 
 #[get("/audit")]
-
-async fn audit_directory<'a>(mut query: web::Query<AuditQuery>, data: web::Data<ASData>) -> impl Responder {
-    log::debug!("Received audit query: {:?}", query);
+async fn audit_directory<'a>(query: web::Query<AuditQuery>, data: web::Data<ASData>) -> impl Responder {
     // For this one we use the parameters and/or their defaults mostly as-is, but we automatically adjust an unset max epoch value to the largest valid value to avoid making the user worry about the current epoch value
     // Since the max allowable epoch value requires an api query, set ourselves up here
     let dir = data.directory.lock().unwrap();

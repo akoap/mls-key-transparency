@@ -55,7 +55,7 @@ async fn log_epoch(json: web::Json<EpochHashSerializable>, data: web::Data<Audit
     };
 
     let mut url = data.as_url.clone();
-    let audit_query = AuditQuery { start_epoch: previous_epoch.0, end_epoch: new_epoch_hash.0 };
+    let audit_query = AuditQuery { start_epoch: Some(previous_epoch.0), end_epoch: Some(new_epoch_hash.0) };
 
     let query_string = serde_qs::to_string(&audit_query).unwrap();
     url.set_path("/audit");
