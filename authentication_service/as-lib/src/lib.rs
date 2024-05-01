@@ -34,7 +34,7 @@ pub mod serde_helpers {
 
 
 // The EpochHash struct was not mads serializable by the creators of AKD, so we make an equivalent struct here that is serializable
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Copy, Clone, Debug)]
 pub struct EpochHashSerializable {
     pub epoch: u64,
     #[serde(serialize_with = "serde_helpers::bytes_serialize_hex")]
@@ -100,6 +100,31 @@ pub struct UserHistoryRet{
 #[derive(der::Sequence)]
 pub struct AKDValueFormat {
     pub vec: Vec<asn1::Any>,
+}
+
+// Private struct defining the query parameters used to control the get user history endpoint
+#[derive(Deserialize, Serialize)]
+pub struct HistoryParamsQuery {
+    pub most_recent: usize,
+    pub since_epoch: u64
+}
+
+
+// Override the default values to ensure the output is sane
+impl Default for HistoryParamsQuery {
+    fn default() -> Self {
+        HistoryParamsQuery {
+            most_recent: std::usize::MIN,
+            since_epoch: std::u64::MAX
+        }
+    }
+}
+
+// Private struct defining the query parameters used to control the audit endpoint
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AuditQuery {
+    pub start_epoch: u64,
+    pub end_epoch: u64
 }
 
 // Public function to convert a vector of DER encoded public keys into the Akd value used
