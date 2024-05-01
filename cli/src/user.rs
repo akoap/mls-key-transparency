@@ -3,8 +3,10 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, BufWriter};
 use std::path::PathBuf;
+use std::str::from_utf8;
 use std::{cell::RefCell, collections::HashMap, str};
 
+use akd::VerifyResult;
 use as_lib::*;
 use ds_lib::messages::AuthToken;
 use ds_lib::{ClientKeyPackages, GroupMessage};
@@ -55,6 +57,8 @@ pub struct User {
     crypto: OpenMlsRustPersistentCrypto,
     autosave_enabled: bool,
     auth_token: Option<AuthToken>,
+    epoch_added: Option<u64>,
+    as_pub_key: [u8;32]
 }
 
 #[derive(PartialEq)]
@@ -65,8 +69,10 @@ pub enum PostUpdateActions {
 
 impl User {
     /// Create a new user with the given name and a fresh set of credentials.
-    pub fn new(username: String) -> Self {
+    pub fn new(username: String, as_public_key:&[u8;32]) -> Self {
         let crypto = OpenMlsRustPersistentCrypto::default();
+        let mut temp: [u8;32] = Default::default();
+        temp.copy_from_slice(as_public_key);
         let out = Self {
             groups: RefCell::new(HashMap::new()),
             group_list: HashSet::new(),
@@ -76,6 +82,8 @@ impl User {
             crypto,
             autosave_enabled: false,
             auth_token: None,
+            epoch_added: None,
+            as_pub_key: temp,
         };
         out
     }
@@ -167,6 +175,39 @@ impl User {
         }
     }
 
+    pub fn check_history(&self, server_public_key:&[u8;32]) -> Result<bool, String> {
+        let user_history = self.backend.get_user_history(self, akd::directory::HistoryParams::Complete)?;
+        let key_history_result: Vec<VerifyResult> = match akd::client::key_history_verify::<akd::WhatsAppV1Configuration>(
+            server_public_key, 
+            user_history.epoch_hash.digest, 
+            user_history.epoch_hash.epoch, 
+            akd::AkdLabel::from(&self.username()), 
+            user_history.proof, 
+            akd::HistoryVerificationParams::Default) {
+                Ok(result) => result,
+                Err(_) => return Ok(false),
+            };
+        // We don't currently support changing signature keys for users, so validate that there's only one key there and that key is the current one
+        if key_history_result.len() == 1 {
+            let borrowed_public_key = self
+                .identity
+                .borrow();
+            let public_key = borrowed_public_key
+                .credential_with_key
+                .signature_key
+                .as_slice();
+            let pub_key_buf = PubKeyBuf { 0: User::to_der_public_key(public_key)? };
+            let akd_val = match to_akd_value(&mut vec![pub_key_buf]) {
+                Ok(val) => val,
+                Err(_) => return Err("Could not serialize expected AKD value".to_string()),
+            };
+            if key_history_result[0].version == 1 && self.epoch_added == Some(key_history_result[0].epoch) && key_history_result[0].value == akd_val {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+
     pub fn enable_auto_save(&mut self) {
         self.autosave_enabled = true;
     }
@@ -224,13 +265,6 @@ impl User {
                 log::debug!("Created new user: {:?}", self.username());
                 self.set_auth_token(token);
 
-                /*
-                let pub_key_plain = unwrap_data!(dir.get_public_key().await).to_bytes();
-                // Then we need to do multiple steps to convert it to the correct format (warning: rearranging this into fewer lines might cause it not to compile)
-                let pub_key_obj =
-                    unwrap_data!(unwrap_data!(VerifyingKey::from_bytes(&pub_key_plain)).to_public_key_der());
-                let pub_key_der = pub_key_obj.as_bytes();
-                 */
                 let borrowed_public_key = self
                     .identity
                     .borrow();
@@ -238,14 +272,7 @@ impl User {
                     .credential_with_key
                     .signature_key
                     .as_slice();
-                let mut public_key_32: [u8; 32] = [0; 32];
-                public_key_32.copy_from_slice(public_key);
-                let public_key_obj = VerifyingKey::from_bytes(&public_key_32)
-                    .expect("Failed to convert public key bytes to object")
-                    .to_public_key_der()
-                    .expect("Failed to convert public key to der format");
-                let pub_key_der = public_key_obj.as_bytes();
-                let pub_key_buf = PubKeyBuf { 0: pub_key_der.to_vec() };
+                let pub_key_buf = PubKeyBuf { 0: User::to_der_public_key(public_key).expect("Could not convert public key to DER format.") };
                 let add_user_input = AddUserInput {
                     username: self.username(),
                     public_keys: vec![pub_key_buf],
@@ -253,6 +280,7 @@ impl User {
                 match self.backend.add_user_akd(&add_user_input) {
                     Ok(_epoch_hash_serializable) => {
                         log::debug!("User added to directory: {:?}", self.username());
+                        self.epoch_added = Some(_epoch_hash_serializable.epoch);
                     }
                     Err(e) => log::error!("Error adding user to Akd: {:?}", e),
                 }
@@ -494,6 +522,22 @@ impl User {
                 if commit_ptr.self_removed() {
                     remove_proposal = true;
                 }
+                // This is where OpenMLS suggests adding our AS hooks, so we do the in-group validation here
+                for (credential, pub_key) in commit_ptr.as_ref().credentials_with_keys_to_verify() {
+                    let cred = match BasicCredential::try_from(credential.clone()) {
+                        Ok(val) => val,
+                        Err(_) => return Err("Credential has wrong type.".to_owned()),
+                    };
+                    let validated_pub_keys = self.get_verified_public_keys_for_user(match from_utf8(cred.identity()){
+                        Ok(v) => v.to_owned(),
+                        Err(_) => return Err("Peer identity could not be decoded".to_owned())
+                    })?;
+                    let public_key = User::to_der_public_key(pub_key.as_slice())?;
+                    if !(validated_pub_keys.contains(&public_key)) {
+                        return Err("Peer Credential could not be verified".to_owned())
+                    }
+                }
+
                 match mls_group.merge_staged_commit(&self.crypto, *commit_ptr) {
                     Ok(()) => {
                         if remove_proposal {
@@ -621,6 +665,35 @@ impl User {
         self.autosave();
     }
 
+    fn get_verified_public_keys_for_user(&self, username: String) -> Result<Vec<Vec<u8>>, String> {
+        let user_akd_data = self.backend.lookup_user(&username)?;
+        let mut lookup_result = match akd::client::lookup_verify::<akd::WhatsAppV1Configuration>(
+            &self.as_pub_key,
+            user_akd_data.epoch_hash.digest, 
+            user_akd_data.epoch_hash.epoch, akd::AkdLabel::from(&username), 
+            user_akd_data.proof){
+                Ok(val) => val,
+                Err(_) => return Err("Could not verify peer AS data.".to_owned()),
+            };
+        let result = match from_akd_value(&mut lookup_result.value) {
+            Ok(val) => val,
+            Err(_) => return Err("Could not deserialize public key from AS.".to_owned())
+        };
+        Ok(result)
+    }
+
+    fn to_der_public_key(signature_key:&[u8]) -> Result<Vec<u8>, String> {
+        let pub_key = match VerifyingKey::try_from(signature_key) {
+            Ok(val) => val,
+            Err(_) => return Err("Could not interpret given bytes as ED25519 key.".to_owned())
+        };
+        let pub_key_obj = match pub_key.to_public_key_der() {
+            Ok(val) => val,
+            Err(_) => return Err("Could not DER encode public key.".to_owned())
+        };
+        return Ok(pub_key_obj.as_bytes().to_vec());
+    }
+
     /// Invite user with the given name to the group.
     pub fn invite(&mut self, name: String, group_name: String) -> Result<(), String> {
         // First we need to get the key package for {id} from the DS.
@@ -631,6 +704,15 @@ impl User {
 
         // Reclaim a key package from the server
         let joiner_key_package = self.backend.consume_key_package(&contact.id).unwrap();
+
+        let verified_public_keys = self.get_verified_public_keys_for_user(contact.username())?;
+
+        let credential = joiner_key_package.unverified_credential();
+        let public_key = User::to_der_public_key(credential.signature_key.as_slice())?;
+        if !(verified_public_keys.contains(&public_key)) {
+            println!("{:?}:{:?}", verified_public_keys, public_key);
+            return Err("Peer Credential could not be verified".to_owned());
+        }
 
         // Build a proposal with this key package and do the MLS bits.
         let mut groups = self.groups.borrow_mut();
@@ -746,7 +828,32 @@ impl User {
                 .expect("Failed to create staged join")
                 .into_group(&self.crypto)
                 .expect("Failed to create MlsGroup");
-
+        // Validate the mls group
+        let ratchet_tree = mls_group.export_ratchet_tree();
+        for node in ratchet_tree.0 {
+            match node {
+                Some(cur_node) => {
+                    match cur_node {
+                        Node::LeafNode(n) => {
+                            let cred = match BasicCredential::try_from(n.credential().clone()) {
+                                Ok(val) => val,
+                                Err(_) => return Err("Credential has wrong type.".to_owned()),
+                            };
+                            let pub_key_to_verify = User::to_der_public_key(n.signature_key().as_slice())?;
+                            let validated_public_keys = self.get_verified_public_keys_for_user(match from_utf8(cred.identity()){
+                                Ok(v) => v.to_owned(),
+                                Err(_) => return Err("Peer identity could not be decoded".to_owned())
+                            })?;
+                            if !(validated_public_keys.contains(&pub_key_to_verify)) {
+                                return Err("Peer Credential could not be verified".to_owned())
+                            }
+                        },
+                        Node::ParentNode(_) => continue,
+                    }
+                }
+                None => continue,
+            }
+        }
         let group_id = mls_group.group_id().to_vec();
         // XXX: Use Welcome's encrypted_group_info field to store group_name.
         let group_name = String::from_utf8(group_id.clone()).unwrap();

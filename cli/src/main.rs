@@ -4,6 +4,9 @@
 
 use std::io::{stdin, stdout, StdoutLock, Write};
 use termion::input::TermRead;
+use ed25519_dalek::{VerifyingKey, pkcs8::DecodePublicKey};
+use as_lib::*;
+use crate::backend::Backend;
 
 mod backend;
 mod conversation;
@@ -25,6 +28,7 @@ const HELP: &str = "
 >>>     - autosave                              enable automatic save of the current client state upon each update
 >>>     - create kp                             create a new key package
 >>>     - create group {group name}             create a new group
+>>>     - check history                         validate the authentication server's key history
 >>>     - group {group name}                    group operations
 >>>         - send {message}                    send message to group
 >>>         - invite {client name}              invite a user to the group
@@ -60,6 +64,10 @@ fn main() {
         .unwrap();
     let mut client = None;
 
+    let server_pub_key_ret = Backend::default().get_public_key().expect("Couldn't retrieve server's public key.");
+    assert!(server_pub_key_ret.hash_algorithm == ASHashAlgorithm::Sha256, "Hash algorithm is unsupported at this time.");
+    let server_pub_key_bytes  = VerifyingKey::from_public_key_der(&server_pub_key_ret.public_key).expect("Public key has wrong type, expected ED25519 key.").to_bytes();
+
     loop {
         stdout.flush().unwrap();
         let op = stdin.read_line().unwrap().unwrap();
@@ -68,7 +76,7 @@ fn main() {
         // There's no persistence. So once the client app stops you have to
         // register a new client.
         if let Some(client_name) = op.strip_prefix("register ") {
-            client = Some(user::User::new(client_name.to_string()));
+            client = Some(user::User::new(client_name.to_string(), &server_pub_key_bytes));
             client.as_mut().unwrap().add_key_package();
             client.as_mut().unwrap().add_key_package();
             client.as_mut().unwrap().register();
@@ -125,6 +133,34 @@ fn main() {
             }
             continue;
         }
+
+        // Check the user's history on the AS
+        if op == "check history" {
+            if let Some(client) = &mut client {
+                let result = match client.check_history(&server_pub_key_bytes) {
+                    Ok(val) => val,
+                    Err(error) => { 
+                        stdout.write_all([b" >>> Received error: ", error.as_bytes(), b"\n\n"].concat().as_slice()).unwrap();
+                        false
+                    }
+                };
+                if result {
+                    stdout
+                        .write_all(b" >>> Verification Succeeded.\n\n")
+                        .unwrap();
+                } else {
+                    stdout
+                        .write_all(b" >>> Verification Failed.\n\n")
+                        .unwrap();
+                }
+            } else {
+                stdout 
+                    .write_all(b" >>> No client to check history for :(\n\n")
+                    .unwrap();
+            }
+            continue;
+        }
+        
 
         // Enable automatic saving of the client state.
         if op == "autosave" {
@@ -284,19 +320,22 @@ fn main() {
 fn basic_test() {
     // Reset the server before doing anything for testing.
     backend::Backend::default().reset_server();
+    let server_pub_key_ret = Backend::default().get_public_key().expect("Couldn't retrieve server's public key.");
+    assert!(server_pub_key_ret.hash_algorithm == ASHashAlgorithm::Sha256, "Hash algorithm is unsupported at this time.");
+    let server_pub_key_bytes  = VerifyingKey::from_public_key_der(&server_pub_key_ret.public_key).expect("Public key has wrong type, expected ED25519 key.").to_bytes();
 
     const MESSAGE_1: &str = "Thanks for adding me Client1.";
     const MESSAGE_2: &str = "Welcome Client3.";
     const MESSAGE_3: &str = "Thanks so much for the warm welcome! 😊";
 
     // Create one client
-    let mut client_1 = user::User::new("Client1".to_string());
+    let mut client_1 = user::User::new("Client1".to_string(), &server_pub_key_bytes);
 
     // Create another client
-    let mut client_2 = user::User::new("Client2".to_string());
+    let mut client_2 = user::User::new("Client2".to_string(), &server_pub_key_bytes);
 
     // Create another client
-    let mut client_3 = user::User::new("Client3".to_string());
+    let mut client_3 = user::User::new("Client3".to_string(), &server_pub_key_bytes);
 
     // Update the clients to know about the other clients.
     client_1.update(None).unwrap();

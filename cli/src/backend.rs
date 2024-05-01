@@ -18,6 +18,7 @@ use ds_lib::{
     *,
 };
 use openmls::prelude::*;
+use urlencoding;
 
 pub struct Backend {
     ds_url: Url,
@@ -160,14 +161,33 @@ impl Backend {
     }
 
     // Lookup user key in AKD
-    pub fn lookup_user(&self, user: &User) -> Result<LookupUserRet, String> {
+    pub fn lookup_user(&self, name: &String) -> Result<LookupUserRet, String> {
         let mut url = self.as_url.clone();
         let path = "/".to_string()
-            + &base64::encode_config(user.identity.borrow().identity(), base64::URL_SAFE)
+            + urlencoding::encode(&name.as_str()).into_owned().as_str()
             + "/lookup";
         url.set_path(&path);
         let response = get_as(&url)?;
         match serde_json::from_slice::<LookupUserRet>(&response) {
+            Ok(r) => Ok(r),
+            Err(e) => Err(format!("Error decoding server response: {e:?}")),
+        }
+    }
+
+    // Get key history in AKD
+    pub fn get_user_history(&self, user: &User, options: akd::directory::HistoryParams) -> Result<UserHistoryRet, String> {
+        let mut url = self.as_url.clone();
+        let path = "/".to_string()
+            + urlencoding::encode(&user.username().as_str()).into_owned().as_str()
+            + "/history";
+        url.set_path(&path);
+        match options {
+            akd::HistoryParams::Complete => url.set_query(None),
+            akd::HistoryParams::MostRecent(n) => url.set_query(Some(format!("most_recent={n}").as_str())),
+            akd::HistoryParams::SinceEpoch(n) => url.set_query(Some(format!("since_epoch={n}").as_str())),
+        };
+        let response = get_as(&url)?;
+        match serde_json::from_slice::<UserHistoryRet>(&response) {
             Ok(r) => Ok(r),
             Err(e) => Err(format!("Error decoding server response: {e:?}")),
         }

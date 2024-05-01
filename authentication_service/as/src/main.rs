@@ -12,7 +12,7 @@ use akd::storage::StorageManager;
 use akd::{AkdLabel, EpochHash};
 use ed25519_dalek::pkcs8::*;
 use ed25519_dalek::*;
-
+use urlencoding;
 
 type Config = akd::WhatsAppV1Configuration;
 
@@ -97,7 +97,7 @@ async fn add_user<'a>(mut json: web::Json<AddUserInput>, data: web::Data<ASData>
 #[get("/{username}/lookup")]
 async fn lookup_user<'a>(path: web::Path<String>, data: web::Data<ASData>) -> impl Responder {
     // The username we get from the url used (not sure if this handles url encoding)
-    let username = path.into_inner();
+    let username = unwrap_data!(urlencoding::decode(path.into_inner().as_str())).into_owned();
     // Perform the lookup, format the output, and return it
     let dir = data.directory.lock().unwrap();
     let (proof, hash) = unwrap_data!(dir.lookup(AkdLabel::from(&username)).await);
@@ -111,16 +111,14 @@ async fn lookup_user<'a>(path: web::Path<String>, data: web::Data<ASData>) -> im
 #[get("/{username}/history")]
 async fn user_history<'a>(path: web::Path<String>, query: web::Query<HistoryParamsQuery>, data: web::Data<ASData>) -> impl Responder {
     // The username we get from the url used (not sure if this handles url encoding)
-    let username = path.into_inner();
+    let username = unwrap_data!(urlencoding::decode(path.into_inner().as_str())).into_owned();
     // Since the HistoryParams enum was not made serializable, we use query parameters instead of it
-    let mut params = akd::directory::HistoryParams::Complete;
-    // If most recent query parameter was set, use it
-    if query.most_recent != std::usize::MIN {
-        params = akd::directory::HistoryParams::MostRecent(query.most_recent)
-    // Otherwise if the since epoch query parameter was set, use it
-    } else if query.since_epoch != std::u64::MAX {
-        params = akd::directory::HistoryParams::SinceEpoch(query.since_epoch)
-    }
+    let params = match(query.most_recent, query.since_epoch) {
+        (None, None) => akd::directory::HistoryParams::Complete,
+        (Some(n), None) => akd::directory::HistoryParams::MostRecent(n),
+        (None, Some(n)) => akd::directory::HistoryParams::SinceEpoch(n),
+        (Some(_), Some(_)) => return actix_web::HttpResponse::MultipleChoices().finish(),
+    };
     // Perform the lookup, format the output, and return it
     let dir = data.directory.lock().unwrap();
     let (proof, hash) = unwrap_data!(dir.key_history(&AkdLabel::from(&username), params).await);
@@ -132,17 +130,21 @@ async fn user_history<'a>(path: web::Path<String>, query: web::Query<HistoryPara
 }
 
 #[get("/audit")]
-async fn audit_directory<'a>(mut query: web::Query<AuditQuery>, data: web::Data<ASData>) -> impl Responder {
-    log::debug!("Received audit query: {:?}", query);
+async fn audit_directory<'a>(query: web::Query<AuditQuery>, data: web::Data<ASData>) -> impl Responder {
     // For this one we use the parameters and/or their defaults mostly as-is, but we automatically adjust an unset max epoch value to the largest valid value to avoid making the user worry about the current epoch value
     // Since the max allowable epoch value requires an api query, set ourselves up here
     let dir = data.directory.lock().unwrap();
     // Perform the necessary adjustment
-    if query.end_epoch == std::u64::MAX {
-        query.end_epoch = unwrap_data!(dir.get_epoch_hash().await).0;
-    }
+    let start_epoch_val:u64 = match query.start_epoch {
+        None => 0,
+        Some(n) => n,
+    };
+    let end_epoch_val = match query.end_epoch {
+        None => unwrap_data!(dir.get_epoch_hash().await).0,
+        Some(n) => n,
+    };
     // get the proof and return it after serializing
-    let result = unwrap_data!(dir.audit(query.start_epoch, query.end_epoch).await);
+    let result = unwrap_data!(dir.audit(start_epoch_val, end_epoch_val).await);
     log::debug!("Audit result: {:?}", result);
     actix_web::HttpResponse::Ok().json(result)
 }

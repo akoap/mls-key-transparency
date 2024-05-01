@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use as_lib::{AddUserInput, AuditQuery, HistoryParamsQuery, PubKeyBuf};
+use as_lib::{AddUserInput, HistoryParamsQuery, PubKeyBuf};
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ed25519_dalek::{pkcs8::EncodePublicKey, VerifyingKey};
 use reqwest;
@@ -66,8 +66,8 @@ pub fn bench_add_user(c: &mut Criterion) {
 
 pub fn bench_user_history(c: &mut Criterion) {
     let history_params_query = HistoryParamsQuery {
-        most_recent: 1,
-        since_epoch: 0,
+        most_recent: Some(1),
+        since_epoch: Some(0),
     };
     let mut url = Url::parse("http://localhost:8000").unwrap();
     let query_string = serde_qs::to_string(&history_params_query).unwrap();

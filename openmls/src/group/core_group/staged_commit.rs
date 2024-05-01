@@ -8,6 +8,7 @@ use self::public_group::staged_commit::PublicStagedCommitState;
 
 use super::{super::errors::*, proposals::ProposalStore, *};
 use crate::{
+    prelude::SignaturePublicKey,
     framing::mls_auth_content::AuthenticatedContent,
     treesync::node::encryption_keys::EncryptionKeyPair,
 };
@@ -492,6 +493,52 @@ impl StagedCommit {
                                         external_senders
                                             .iter()
                                             .map(|external_sender| external_sender.credential())
+                                            .collect()
+                                    }
+                                    _ => vec![],
+                                }
+                                .into_iter()
+                            })
+                            // TODO: ideally we wouldn't collect in between here, but the match arms
+                            //       have to all return the same type. We solve this by having them all
+                            //       be vec::IntoIter, but it would be nice if we just didn't have to
+                            //       do this.
+                            //       It might be possible to solve this by letting all match arms
+                            //       evaluate to a dyn Iterator.
+                            .collect::<Vec<_>>()
+                            .into_iter(),
+                        _ => vec![].into_iter(),
+                    }),
+            )
+    }
+
+    pub fn credentials_with_keys_to_verify(&self) -> impl Iterator<Item = (&Credential, &SignaturePublicKey)> {
+        let update_path_leaf_node_cred = if let Some(node) = self.update_path_leaf_node() {
+            vec![(node.credential(), node.signature_key())]
+        } else {
+            vec![]
+        };
+
+        update_path_leaf_node_cred
+            .into_iter()
+            .chain(
+                self.queued_proposals()
+                    .flat_map(|proposal: &QueuedProposal| match proposal.proposal() {
+                        Proposal::Update(update_proposal) => {
+                            vec![(update_proposal.leaf_node().credential(), update_proposal.leaf_node().signature_key())].into_iter()
+                        }
+                        Proposal::Add(add_proposal) => {
+                            vec![(add_proposal.key_package().leaf_node().credential(), add_proposal.key_package().leaf_node().signature_key())].into_iter()
+                        }
+                        Proposal::GroupContextExtensions(gce_proposal) => gce_proposal
+                            .extensions()
+                            .iter()
+                            .flat_map(|extension| {
+                                match extension {
+                                    Extension::ExternalSenders(external_senders) => {
+                                        external_senders
+                                            .iter()
+                                            .map(|external_sender| (external_sender.credential(), external_sender.signature_key()))
                                             .collect()
                                     }
                                     _ => vec![],
